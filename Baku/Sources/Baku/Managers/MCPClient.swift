@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let mcpLogger = Logger(subsystem: "com.baku.app", category: "MCPClient")
 
 /// Client for communicating with MCP servers via stdio
 actor MCPClient {
@@ -18,12 +21,61 @@ actor MCPClient {
         self.environment = environment
     }
 
+    // MARK: - Node Path Resolution
+
+    /// Find node executable - GUI apps don't inherit shell PATH with nvm/homebrew
+    private static func findNodePath() -> String? {
+        let possiblePaths = [
+            // nvm paths (common)
+            "\(NSHomeDirectory())/.nvm/versions/node/v20.5.0/bin/node",
+            "\(NSHomeDirectory())/.nvm/versions/node/v22.0.0/bin/node",
+            "\(NSHomeDirectory())/.nvm/versions/node/v21.0.0/bin/node",
+            "\(NSHomeDirectory())/.nvm/versions/node/v18.0.0/bin/node",
+            // Homebrew paths
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+            // System
+            "/usr/bin/node"
+        ]
+
+        // Also check for any nvm version
+        let nvmVersionsDir = "\(NSHomeDirectory())/.nvm/versions/node"
+        if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmVersionsDir) {
+            for version in versions.sorted().reversed() { // prefer newest
+                let nodePath = "\(nvmVersionsDir)/\(version)/bin/node"
+                if FileManager.default.isExecutableFile(atPath: nodePath) {
+                    mcpLogger.info("Found node via nvm: \(nodePath)")
+                    return nodePath
+                }
+            }
+        }
+
+        for path in possiblePaths {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                mcpLogger.info("Found node at: \(path)")
+                return path
+            }
+        }
+
+        mcpLogger.error("Node not found in any expected location")
+        return nil
+    }
+
     // MARK: - Lifecycle
 
     func start() async throws {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["node", serverPath] + serverArgs
+
+        // Find node executable - GUI apps don't inherit shell PATH
+        guard let nodePath = MCPClient.findNodePath() else {
+            mcpLogger.error("Cannot start MCP server: node not found")
+            throw MCPError.nodeNotFound
+        }
+
+        process.executableURL = URL(fileURLWithPath: nodePath)
+        process.arguments = [serverPath] + serverArgs
+
+        mcpLogger.info("Starting MCP server: \(nodePath) \(self.serverPath)")
 
         var env = ProcessInfo.processInfo.environment
         for (key, value) in environment {
@@ -94,7 +146,7 @@ actor MCPClient {
 
     // MARK: - Private
 
-    private func call(method: String, params: [String: Any]) async throws -> MCPResponse {
+    private func call(method: String, params: [String: Any], timeout: TimeInterval = 30) async throws -> MCPResponse {
         requestId += 1
         let id = requestId
 
@@ -111,10 +163,26 @@ actor MCPClient {
         }
         message += "\n"
 
-        return try await withCheckedThrowingContinuation { continuation in
+        mcpLogger.debug("MCP call: \(method) (id: \(id))")
+
+        // Store continuation and write message before starting timeout race
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<MCPResponse, Error>) in
             pendingRequests[id] = continuation
             stdin?.write(message.data(using: .utf8)!)
+
+            // Start timeout task
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                // If request still pending after timeout, fail it
+                if let pending = await self.removePendingRequest(id: id) {
+                    pending.resume(throwing: MCPError.timeout)
+                }
+            }
         }
+    }
+
+    private func removePendingRequest(id: Int) -> CheckedContinuation<MCPResponse, Error>? {
+        return pendingRequests.removeValue(forKey: id)
     }
 
     private func readResponses() async {
@@ -209,9 +277,22 @@ struct MCPContent {
     }
 }
 
-enum MCPError: Error {
+enum MCPError: Error, LocalizedError {
     case notConnected
     case encodingError
     case invalidResponse
     case toolError(String)
+    case nodeNotFound
+    case timeout
+
+    var errorDescription: String? {
+        switch self {
+        case .notConnected: return "MCP client not connected"
+        case .encodingError: return "Failed to encode MCP request"
+        case .invalidResponse: return "Invalid response from MCP server"
+        case .toolError(let msg): return "MCP tool error: \(msg)"
+        case .nodeNotFound: return "Node.js not found. Install via: brew install node"
+        case .timeout: return "MCP request timed out"
+        }
+    }
 }

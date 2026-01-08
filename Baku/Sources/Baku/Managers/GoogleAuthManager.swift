@@ -43,11 +43,18 @@ class GoogleAuthManager: ObservableObject {
 
         googleAuthLogger.info("Using auth script at: \(scriptPath)")
 
+        // Find node executable
+        guard let nodePath = findNodePath() else {
+            error = "Node.js not found. Install via: brew install node"
+            throw GoogleAuthError.nodeNotFound
+        }
+
+        googleAuthLogger.info("Using node at: \(nodePath)")
+
         // Run the auth helper
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.executableURL = URL(fileURLWithPath: nodePath)
         process.arguments = [
-            "node",
             scriptPath,
             "--client-id", clientId,
             "--client-secret", clientSecret
@@ -176,6 +183,25 @@ class GoogleAuthManager: ObservableObject {
 
     // MARK: - Private
 
+    private func findNodePath() -> String? {
+        let possiblePaths = [
+            "/opt/homebrew/bin/node",      // Apple Silicon Homebrew
+            "/usr/local/bin/node",          // Intel Homebrew
+            "/usr/bin/node",                // System
+            "\(NSHomeDirectory())/.nvm/versions/node/v20.10.0/bin/node",  // Common nvm
+            "\(NSHomeDirectory())/.nvm/versions/node/v18.19.0/bin/node"
+        ]
+
+        for path in possiblePaths {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+
+        // Try to find via which (won't work in sandboxed app, but worth trying)
+        return nil
+    }
+
     private func findAuthScript() -> String? {
         let possiblePaths = [
             // Development path
@@ -246,6 +272,7 @@ struct GoogleAuthErrorResponse: Codable {
 
 enum GoogleAuthError: Error, LocalizedError {
     case scriptNotFound
+    case nodeNotFound
     case processError(String)
     case noResponse
     case invalidResponse
@@ -258,6 +285,8 @@ enum GoogleAuthError: Error, LocalizedError {
         switch self {
         case .scriptNotFound:
             return "Authentication helper not found"
+        case .nodeNotFound:
+            return "Node.js not found. Install via: brew install node"
         case .processError(let msg):
             return "Process error: \(msg)"
         case .noResponse:

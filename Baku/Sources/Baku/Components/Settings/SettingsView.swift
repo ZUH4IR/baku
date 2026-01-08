@@ -800,9 +800,37 @@ struct PlatformConfigSheet: View {
             Divider()
 
             // Server/Guild selection
-            if discordUser != nil || !discordManager.guilds.isEmpty {
-                discordGuildSelector
-            } else if credentials["user_token"]?.isEmpty != false {
+            if credentials["user_token"]?.isEmpty == false {
+                // Token exists - show guild selector or loading state
+                if !discordManager.guilds.isEmpty {
+                    discordGuildSelector
+                } else if discordManager.isLoading {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Loading servers...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding()
+                } else {
+                    VStack(spacing: 8) {
+                        Text("No servers loaded")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Button("Load Servers") {
+                            Task {
+                                try? await discordManager.fetchGuilds()
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding()
+                }
+            } else {
                 Text("Enter your token and click Test to load your servers")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -847,11 +875,21 @@ struct PlatformConfigSheet: View {
         .cornerRadius(8)
     }
 
+    @State private var guildSearchText = ""
+
+    private var filteredGuilds: [DiscordGuild] {
+        let guilds = discordManager.guilds
+        if guildSearchText.isEmpty {
+            return Array(guilds.prefix(30)) // Show first 30 by default
+        }
+        return guilds.filter { $0.name.localizedCaseInsensitiveContains(guildSearchText) }
+    }
+
     @ViewBuilder
     private var discordGuildSelector: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Select Servers")
+                Text("Select Servers (\(discordManager.guilds.count))")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
 
@@ -871,26 +909,77 @@ struct PlatformConfigSheet: View {
                 .controlSize(.small)
             }
 
-            if discordManager.guilds.isEmpty {
-                Text("Loading servers...")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            } else {
-                VStack(spacing: 6) {
-                    ForEach(discordManager.guilds) { guild in
-                        DiscordGuildRow(
-                            guild: guild,
-                            isSelected: settings.discordSelectedGuilds.contains(guild.id)
-                        ) {
-                            settings.toggleDiscordGuild(guild.id)
+            // Search field for many guilds
+            if discordManager.guilds.count > 10 {
+                TextField("Search servers...", text: $guildSearchText)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            // Show selected servers first
+            let selectedGuilds = discordManager.guilds.filter { settings.discordSelectedGuilds.contains($0.id) }
+            if !selectedGuilds.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Selected")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .textCase(.uppercase)
+
+                    VStack(spacing: 4) {
+                        ForEach(selectedGuilds) { guild in
+                            DiscordGuildRow(
+                                guild: guild,
+                                isSelected: true
+                            ) {
+                                settings.toggleDiscordGuild(guild.id)
+                            }
                         }
                     }
                 }
 
-                Text("\(settings.discordSelectedGuilds.count) server\(settings.discordSelectedGuilds.count == 1 ? "" : "s") selected")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Divider()
+                    .padding(.vertical, 4)
             }
+
+            // Available servers (filtered)
+            VStack(alignment: .leading, spacing: 4) {
+                if !selectedGuilds.isEmpty || !guildSearchText.isEmpty {
+                    Text(guildSearchText.isEmpty ? "Available" : "Search Results")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .textCase(.uppercase)
+                }
+
+                let availableGuilds = filteredGuilds.filter { !settings.discordSelectedGuilds.contains($0.id) }
+                if availableGuilds.isEmpty && !guildSearchText.isEmpty {
+                    Text("No servers match '\(guildSearchText)'")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.vertical, 8)
+                } else {
+                    VStack(spacing: 4) {
+                        ForEach(availableGuilds) { guild in
+                            DiscordGuildRow(
+                                guild: guild,
+                                isSelected: false
+                            ) {
+                                settings.toggleDiscordGuild(guild.id)
+                            }
+                        }
+                    }
+
+                    if guildSearchText.isEmpty && discordManager.guilds.count > 30 {
+                        Text("Showing 30 of \(discordManager.guilds.count) servers. Search to find more.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 4)
+                    }
+                }
+            }
+
+            Text("\(settings.discordSelectedGuilds.count) server\(settings.discordSelectedGuilds.count == 1 ? "" : "s") selected")
+                .font(.caption)
+                .foregroundColor(.accentColor)
+                .padding(.top, 4)
 
             Divider()
 
