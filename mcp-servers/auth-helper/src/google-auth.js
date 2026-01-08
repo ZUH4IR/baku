@@ -23,8 +23,8 @@ const SCOPES = [
 ].join(' ');
 
 async function getAuthTokens(clientId, clientSecret) {
-    // Find an available port
-    const port = await findAvailablePort();
+    // Use a fixed port so it can be pre-registered in Google Cloud Console
+    const port = 8085;
     const redirectUri = `http://localhost:${port}/callback`;
 
     // Build OAuth URL

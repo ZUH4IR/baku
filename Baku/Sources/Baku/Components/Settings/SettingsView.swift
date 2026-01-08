@@ -313,8 +313,11 @@ private struct PlatformRow: View {
 
 private struct AISettingsTab: View {
     @StateObject private var settings = SettingsManager.shared
+    @StateObject private var claudeManager = ClaudeManager.shared
     @State private var isEditingAPIKey = false
     @State private var apiKeyInput = ""
+    @State private var testError = ""
+    @State private var showingRepairSheet = false
 
     private var hasAPIKey: Bool {
         settings.getCredential(platform: .gmail, key: "claude_api_key") != nil
@@ -322,6 +325,69 @@ private struct AISettingsTab: View {
 
     var body: some View {
         Form {
+            // Self-Healing Section
+            Section("Self-Healing") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Claude Code CLI")
+                        Text(claudeManager.canSelfHeal ? "Available" : "Not installed")
+                            .font(.caption)
+                            .foregroundColor(claudeManager.canSelfHeal ? .green : .secondary)
+                    }
+
+                    Spacer()
+
+                    if claudeManager.canSelfHeal {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                    } else {
+                        Link("Install", destination: URL(string: "https://claude.ai/download")!)
+                            .font(.caption)
+                    }
+                }
+
+                if claudeManager.canSelfHeal {
+                    Toggle("Auto-fix build errors", isOn: Binding(
+                        get: { Defaults[.autoFixErrors] },
+                        set: { Defaults[.autoFixErrors] = $0 }
+                    ))
+
+                    // Test repair button
+                    HStack {
+                        TextField("Paste build error to test", text: $testError, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(2...4)
+
+                        Button {
+                            showingRepairSheet = true
+                        } label: {
+                            if claudeManager.isRepairing {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                            } else {
+                                Text("Fix")
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(testError.isEmpty || claudeManager.isRepairing)
+                    }
+
+                    if let result = claudeManager.lastRepairResult {
+                        HStack(spacing: 6) {
+                            Image(systemName: result.success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundColor(result.success ? .green : .red)
+                            Text(result.summary)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                Text("Uses Claude Code CLI to automatically diagnose and fix Swift errors")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Section("Claude API") {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -401,6 +467,116 @@ private struct AISettingsTab: View {
         }
         .formStyle(.grouped)
         .padding(Design.padding)
+        .sheet(isPresented: $showingRepairSheet) {
+            RepairSheet(error: testError)
+        }
+    }
+}
+
+// MARK: - Repair Sheet
+
+private struct RepairSheet: View {
+    let error: String
+    @StateObject private var claudeManager = ClaudeManager.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var hasStarted = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Self-Healing Repair")
+                    .font(.headline)
+                Spacer()
+                if claudeManager.isRepairing {
+                    Button("Cancel") {
+                        claudeManager.cancelRepair()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                } else {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding()
+
+            Divider()
+
+            // Status
+            HStack(spacing: 8) {
+                if claudeManager.isRepairing {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Claude is analyzing and fixing the error...")
+                        .font(.subheadline)
+                } else if let result = claudeManager.lastRepairResult {
+                    Image(systemName: result.success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundColor(result.success ? .green : .red)
+                    Text(result.summary)
+                        .font(.subheadline)
+                } else {
+                    Image(systemName: "sparkles")
+                        .foregroundColor(.accentColor)
+                    Text("Starting repair...")
+                        .font(.subheadline)
+                }
+                Spacer()
+            }
+            .padding()
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            // Output
+            ScrollView {
+                Text(claudeManager.repairOutput.isEmpty ? "Waiting for output..." : claudeManager.repairOutput)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+
+            Divider()
+
+            // Footer
+            HStack {
+                if !claudeManager.isRepairing {
+                    Button("Retry") {
+                        startRepair()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Spacer()
+
+                Button("Close") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding()
+        }
+        .frame(width: 600, height: 450)
+        .onAppear {
+            if !hasStarted {
+                hasStarted = true
+                startRepair()
+            }
+        }
+    }
+
+    private func startRepair() {
+        Task {
+            // Get the Baku project path
+            let projectPath = Bundle.main.bundlePath
+                .replacingOccurrences(of: "/Products/Debug/Baku.app", with: "")
+                .replacingOccurrences(of: "/.build/debug/Baku", with: "")
+
+            _ = try? await claudeManager.repairBuildError(error, projectPath: projectPath)
+        }
     }
 }
 

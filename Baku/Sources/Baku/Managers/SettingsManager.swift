@@ -18,6 +18,11 @@ class SettingsManager: ObservableObject {
     @Published var discordSelectedDMs: Set<String> = []
     @Published var discordIncludeDMs: Bool = true
 
+    // MARK: - Credential Cache (avoids repeated keychain prompts)
+
+    private var credentialCache: [String: String] = [:]
+    private var credentialCacheLoaded = false
+
     // MARK: - Initialization
 
     init() {
@@ -192,14 +197,48 @@ class SettingsManager: ObservableObject {
         return env
     }
 
-    // MARK: - Credential Storage (Keychain)
+    // MARK: - Credential Storage (Keychain with caching)
 
     private let keychainService = "com.baku.credentials"
+
+    /// Load all credentials into cache on first access (single keychain prompt)
+    private func loadCredentialCacheIfNeeded() {
+        guard !credentialCacheLoaded else { return }
+        credentialCacheLoaded = true
+
+        // Query all items for our service at once
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecReturnAttributes as String: true,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        guard status == errSecSuccess,
+              let items = result as? [[String: Any]] else {
+            return
+        }
+
+        for item in items {
+            if let account = item[kSecAttrAccount as String] as? String,
+               let data = item[kSecValueData as String] as? Data,
+               let value = String(data: data, encoding: .utf8) {
+                credentialCache[account] = value
+            }
+        }
+    }
 
     func setCredential(platform: Platform, key: String, value: String) {
         let account = "\(platform.rawValue)_\(key)"
 
-        // Delete existing
+        // Update cache immediately
+        credentialCache[account] = value
+
+        // Delete existing from keychain
         let deleteQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -207,12 +246,13 @@ class SettingsManager: ObservableObject {
         ]
         SecItemDelete(deleteQuery as CFDictionary)
 
-        // Add new
+        // Add new with accessible attribute to reduce prompts
         let addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
             kSecAttrAccount as String: account,
-            kSecValueData as String: value.data(using: .utf8)!
+            kSecValueData as String: value.data(using: .utf8)!,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
         SecItemAdd(addQuery as CFDictionary, nil)
     }
@@ -220,29 +260,23 @@ class SettingsManager: ObservableObject {
     func getCredential(platform: Platform, key: String) -> String? {
         let account = "\(platform.rawValue)_\(key)"
 
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let value = String(data: data, encoding: .utf8) else {
-            return nil
+        // Check cache first
+        if credentialCacheLoaded {
+            return credentialCache[account]
         }
 
-        return value
+        // Load all credentials into cache (single keychain access)
+        loadCredentialCacheIfNeeded()
+        return credentialCache[account]
     }
 
     func deleteCredential(platform: Platform, key: String) {
         let account = "\(platform.rawValue)_\(key)"
 
+        // Remove from cache
+        credentialCache.removeValue(forKey: account)
+
+        // Remove from keychain
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -266,6 +300,13 @@ class SettingsManager: ObservableObject {
         for key in keys {
             deleteCredential(platform: platform, key: key)
         }
+    }
+
+    /// Force reload credentials from keychain (use after "Always Allow")
+    func reloadCredentials() {
+        credentialCache.removeAll()
+        credentialCacheLoaded = false
+        loadCredentialCacheIfNeeded()
     }
 }
 
@@ -295,4 +336,7 @@ extension Defaults.Keys {
     static let discordSelectedGuilds = Key<[String]>("discordSelectedGuilds", default: [])
     static let discordSelectedDMs = Key<[String]>("discordSelectedDMs", default: [])
     static let discordIncludeDMs = Key<Bool>("discordIncludeDMs", default: true)
+
+    // Self-healing settings
+    static let autoFixErrors = Key<Bool>("autoFixErrors", default: false)
 }

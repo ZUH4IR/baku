@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let claudeLogger = Logger(subsystem: "com.baku.app", category: "claude")
 
 /// Manages communication with Claude via the claude CLI
 @MainActor
@@ -8,7 +11,13 @@ class ClaudeManager: ObservableObject {
     @Published var isGenerating: Bool = false
     @Published var lastError: Error?
 
+    // Self-healing agent state
+    @Published var isRepairing: Bool = false
+    @Published var repairOutput: String = ""
+    @Published var lastRepairResult: RepairResult?
+
     private let settings = SettingsManager.shared
+    private var agentProcess: Process?
 
     /// Path to claude CLI - checks common install locations
     private var claudePath: String? {
@@ -332,6 +341,176 @@ class ClaudeManager: ObservableObject {
             return "0,1,2,3" // Default order
         } else {
             return "Thanks for your message! I'll respond properly soon."
+        }
+    }
+
+    // MARK: - Self-Healing Agent
+
+    /// Repair a Swift build error using Claude Agent
+    func repairBuildError(_ error: String, projectPath: String? = nil) async throws -> RepairResult {
+        guard let path = claudePath else {
+            throw ClaudeError.noCLI
+        }
+
+        isRepairing = true
+        repairOutput = ""
+        claudeLogger.info("Starting self-healing repair for error")
+
+        defer { isRepairing = false }
+
+        let workingDir = projectPath ?? FileManager.default.currentDirectoryPath
+        let prompt = buildRepairPrompt(error: error)
+
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: path)
+                process.arguments = [
+                    "--print",
+                    "--dangerously-skip-permissions",
+                    "--allowedTools", "Read,Edit,Glob,Grep,Bash",
+                    "--max-turns", "15",
+                    prompt
+                ]
+                process.currentDirectoryURL = URL(fileURLWithPath: workingDir)
+                process.environment = ProcessInfo.processInfo.environment
+                process.environment?["FORCE_COLOR"] = "0"
+
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
+                process.standardOutput = outputPipe
+                process.standardError = errorPipe
+
+                self?.agentProcess = process
+
+                // Stream output
+                outputPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    if let str = String(data: data, encoding: .utf8), !str.isEmpty {
+                        DispatchQueue.main.async {
+                            self?.repairOutput += str
+                        }
+                    }
+                }
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+
+                    outputPipe.fileHandleForReading.readabilityHandler = nil
+
+                    let output = self?.repairOutput ?? ""
+                    let success = process.terminationStatus == 0
+
+                    DispatchQueue.main.async {
+                        let result = RepairResult(
+                            success: success,
+                            output: output,
+                            filesChanged: self?.parseChangedFiles(from: output) ?? [],
+                            timestamp: Date()
+                        )
+                        self?.lastRepairResult = result
+                        self?.agentProcess = nil
+
+                        if success {
+                            claudeLogger.info("Repair completed successfully")
+                            continuation.resume(returning: result)
+                        } else {
+                            claudeLogger.warning("Repair failed with exit code \(process.terminationStatus)")
+                            continuation.resume(returning: result)
+                        }
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        self?.agentProcess = nil
+                        claudeLogger.error("Repair process error: \(error.localizedDescription)")
+                        continuation.resume(throwing: ClaudeError.cliError(message: error.localizedDescription))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Cancel ongoing repair
+    func cancelRepair() {
+        agentProcess?.terminate()
+        agentProcess = nil
+        isRepairing = false
+        claudeLogger.info("Repair cancelled by user")
+    }
+
+    /// Check if Claude CLI is available for self-healing
+    var canSelfHeal: Bool {
+        claudePath != nil
+    }
+
+    private func buildRepairPrompt(error: String) -> String {
+        """
+        You are debugging a Swift/SwiftUI macOS app called Baku.
+
+        BUILD ERROR:
+        \(error)
+
+        INSTRUCTIONS:
+        1. Read the file(s) mentioned in the error to understand the context
+        2. Identify the root cause of the compilation error
+        3. Fix the error by editing the necessary file(s)
+        4. Be minimal - only change what's necessary to fix the error
+        5. Don't add new features or refactor unrelated code
+
+        Common Swift errors to watch for:
+        - Missing imports
+        - Type mismatches
+        - Actor isolation issues (add @MainActor or use Task)
+        - Optional handling (use ?. or ?? or if-let)
+        - Missing protocol conformances
+
+        Fix the error now.
+        """
+    }
+
+    private func parseChangedFiles(from output: String) -> [String] {
+        // Parse Claude's output to find edited files
+        var files: [String] = []
+        let patterns = [
+            "Edited (.+\\.swift)",
+            "Modified (.+\\.swift)",
+            "Updated (.+\\.swift)"
+        ]
+
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+                let range = NSRange(output.startIndex..., in: output)
+                let matches = regex.matches(in: output, range: range)
+                for match in matches {
+                    if let fileRange = Range(match.range(at: 1), in: output) {
+                        files.append(String(output[fileRange]))
+                    }
+                }
+            }
+        }
+
+        return files
+    }
+}
+
+// MARK: - Repair Result
+
+struct RepairResult {
+    let success: Bool
+    let output: String
+    let filesChanged: [String]
+    let timestamp: Date
+
+    var summary: String {
+        if success {
+            if filesChanged.isEmpty {
+                return "Repair completed"
+            } else {
+                return "Fixed \(filesChanged.count) file\(filesChanged.count == 1 ? "" : "s")"
+            }
+        } else {
+            return "Repair failed - manual fix needed"
         }
     }
 }
