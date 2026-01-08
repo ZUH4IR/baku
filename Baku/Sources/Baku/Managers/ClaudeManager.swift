@@ -21,12 +21,21 @@ class ClaudeManager: ObservableObject {
 
     /// Path to claude CLI - checks common install locations
     private var claudePath: String? {
-        let paths = [
+        var paths = [
             "/usr/local/bin/claude",
             "/opt/homebrew/bin/claude",
             "\(NSHomeDirectory())/.claude/local/claude",
             "\(NSHomeDirectory())/.local/bin/claude"
         ]
+
+        // Check nvm versions directory for claude
+        let nvmVersionsPath = "\(NSHomeDirectory())/.nvm/versions/node"
+        if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmVersionsPath) {
+            for version in versions.sorted().reversed() { // Check newest versions first
+                paths.append("\(nvmVersionsPath)/\(version)/bin/claude")
+            }
+        }
+
         return paths.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
@@ -491,6 +500,134 @@ class ClaudeManager: ObservableObject {
         }
 
         return files
+    }
+
+    // MARK: - Automation Tasks
+
+    /// State for automation tasks
+    @Published var isAutomating: Bool = false
+    @Published var automationOutput: String = ""
+
+    /// Fetch Discord token automatically using Claude with browser
+    func fetchDiscordToken() async throws -> String {
+        guard let path = claudePath else {
+            throw ClaudeError.noCLI
+        }
+
+        isAutomating = true
+        automationOutput = ""
+        claudeLogger.info("Starting Discord token fetch automation")
+
+        defer { isAutomating = false }
+
+        let prompt = """
+        I need you to help me get my Discord user token from Chrome. Here's exactly what to do:
+
+        1. Open Chrome to https://discord.com/app (user should already be logged in)
+        2. Open Chrome DevTools (Cmd+Option+I)
+        3. Go to the Network tab
+        4. Filter requests by typing "api" in the filter box
+        5. Click on any API request (like @me or guilds)
+        6. In the Headers section, find the "Authorization" header
+        7. Copy that token value
+
+        The token is a long string that looks like: "MTI3NjM4..." (starts with letters/numbers, no "Bot " prefix)
+
+        Return ONLY the token string, nothing else. No quotes, no explanation, just the raw token.
+        If you can't get it, return "ERROR: " followed by the reason.
+        """
+
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: path)
+                process.arguments = [
+                    "--print",
+                    "--dangerously-skip-permissions",
+                    "--allowedTools", "Bash,computer",
+                    "--max-turns", "20",
+                    prompt
+                ]
+                process.environment = ProcessInfo.processInfo.environment
+                process.environment?["FORCE_COLOR"] = "0"
+
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
+                process.standardOutput = outputPipe
+                process.standardError = errorPipe
+
+                // Stream output
+                outputPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    if let str = String(data: data, encoding: .utf8), !str.isEmpty {
+                        DispatchQueue.main.async {
+                            self?.automationOutput += str
+                        }
+                    }
+                }
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+
+                    outputPipe.fileHandleForReading.readabilityHandler = nil
+
+                    let output = self?.automationOutput ?? ""
+
+                    DispatchQueue.main.async {
+                        // Extract token from output - it should be a long alphanumeric string
+                        let token = self?.extractToken(from: output)
+
+                        if let token = token, !token.isEmpty, !token.starts(with: "ERROR") {
+                            claudeLogger.info("Successfully fetched Discord token")
+                            continuation.resume(returning: token)
+                        } else {
+                            let error = token ?? "Could not extract token from output"
+                            claudeLogger.warning("Failed to fetch Discord token: \(error)")
+                            continuation.resume(throwing: ClaudeError.cliError(message: error))
+                        }
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        claudeLogger.error("Automation error: \(error.localizedDescription)")
+                        continuation.resume(throwing: ClaudeError.cliError(message: error.localizedDescription))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Extract token from Claude's output
+    private func extractToken(from output: String) -> String? {
+        // Look for a line that looks like a Discord token
+        // Discord tokens are base64-ish strings, typically 50-100 chars
+        let lines = output.components(separatedBy: .newlines)
+
+        for line in lines.reversed() { // Check from end, token is usually last
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`"))
+
+            // Discord tokens: alphanumeric with dots, typically 50-100 chars
+            if trimmed.count >= 50 && trimmed.count <= 150 {
+                let tokenPattern = "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+                if let regex = try? NSRegularExpression(pattern: tokenPattern),
+                   regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
+                    return trimmed
+                }
+            }
+
+            // Also check for simpler pattern (just long alphanumeric)
+            if trimmed.count >= 50 && trimmed.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-" }) {
+                return trimmed
+            }
+
+            // Check for ERROR prefix
+            if trimmed.starts(with: "ERROR:") {
+                return trimmed
+            }
+        }
+
+        return nil
     }
 }
 

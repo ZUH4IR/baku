@@ -1016,14 +1016,71 @@ struct PlatformConfigSheet: View {
         }
     }
 
+    @StateObject private var claudeManager = ClaudeManager.shared
+    @State private var isFetchingToken = false
+    @State private var fetchError: String?
+
     @ViewBuilder
     private var discordTokenHelpSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Divider()
 
-            Text("Get your Discord token in 4 steps:")
-                .font(.subheadline)
-                .fontWeight(.medium)
+            // Auto-fetch option with Claude
+            if claudeManager.canSelfHeal {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "sparkles")
+                            .foregroundColor(.purple)
+                        Text("Auto-fetch with Claude")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                    }
+
+                    Text("Let Claude open Discord and grab your token automatically")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Button {
+                        autoFetchToken()
+                    } label: {
+                        HStack(spacing: 8) {
+                            if isFetchingToken {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                Text("Fetching token...")
+                            } else {
+                                Image(systemName: "wand.and.stars")
+                                Text("Fetch Token Automatically")
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .disabled(isFetchingToken)
+
+                    if let error = fetchError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                }
+                .padding(10)
+                .background(Color.purple.opacity(0.1))
+                .cornerRadius(8)
+
+                Divider()
+                    .padding(.vertical, 4)
+
+                Text("Or do it manually:")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("Get your Discord token in 4 steps:")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+            }
 
             VStack(alignment: .leading, spacing: 10) {
                 HelpStep(number: 1, text: "Open Discord in your browser", action: "Open Discord") {
@@ -1049,6 +1106,23 @@ struct PlatformConfigSheet: View {
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
         .cornerRadius(8)
+    }
+
+    private func autoFetchToken() {
+        isFetchingToken = true
+        fetchError = nil
+
+        Task {
+            do {
+                let token = try await claudeManager.fetchDiscordToken()
+                credentials["user_token"] = token
+                // Automatically test the token
+                testDiscordToken()
+            } catch {
+                fetchError = error.localizedDescription
+            }
+            isFetchingToken = false
+        }
     }
 
     @State private var guildSearchText = ""
