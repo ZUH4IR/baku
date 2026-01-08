@@ -165,6 +165,13 @@ class ClaudeManager: ObservableObject {
         }
     }
 
+    // MARK: - Public API for Info Pulses
+
+    /// Call Claude for generating info pulse content
+    func callClaudeForPulse(prompt: String) async throws -> String {
+        return try await callClaudeAPI(prompt: prompt)
+    }
+
     // MARK: - Claude CLI Communication
 
     private func callClaudeAPI(prompt: String) async throws -> String {
@@ -299,7 +306,15 @@ class ClaudeManager: ObservableObject {
         // Simulate API delay
         try? await Task.sleep(nanoseconds: 800_000_000)
 
-        if prompt.contains("Gmail") || prompt.contains("email") {
+        if prompt.contains("tech pulse") || prompt.contains("Tech Pulse") || prompt.contains("AI/ML") {
+            return """
+            Claude CLI not installed. To enable Tech Pulse:
+
+            1. Install Claude Code: npm install -g @anthropic-ai/claude-code
+            2. Run 'claude' once to authenticate
+            3. Refresh to see your personalized tech briefing
+            """
+        } else if prompt.contains("Gmail") || prompt.contains("email") {
             return """
             Hi,
 

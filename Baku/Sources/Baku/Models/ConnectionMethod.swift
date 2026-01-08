@@ -24,8 +24,8 @@ enum ConnectionMethod: String, Codable, Identifiable {
     case twitterOAuth = "twitter_oauth"
     case twitterAPI = "twitter_api"
 
-    // Grok/Tech Pulse
-    case grokAPI = "grok_api"
+    // Tech Pulse (uses Claude CLI - no credentials needed)
+    case techPulseClaude = "tech_pulse_claude"
 
     // Free public APIs (no auth needed)
     case marketsPublic = "markets_public"
@@ -41,7 +41,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
         case .discordDesktop, .discordUserToken, .discordBot: return .discord
         case .imessageLocal: return .imessage
         case .twitterOAuth, .twitterAPI: return .twitter
-        case .grokAPI: return .grok
+        case .techPulseClaude: return .grok
         case .marketsPublic: return .markets
         case .newsPublic: return .news
         case .predictionsPublic: return .predictions
@@ -67,7 +67,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
         case .twitterOAuth: return "Sign in with X"
         case .twitterAPI: return "X API"
 
-        case .grokAPI: return "xAI API"
+        case .techPulseClaude: return "Claude Code"
 
         case .marketsPublic: return "Yahoo Finance + CoinGecko"
         case .newsPublic: return "RSS Feeds"
@@ -94,7 +94,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
         case .twitterOAuth: return "Just sign in"
         case .twitterAPI: return "Requires developer account"
 
-        case .grokAPI: return "xAI API key required"
+        case .techPulseClaude: return "Uses Claude CLI - no setup needed"
 
         case .marketsPublic: return "Free - no setup needed"
         case .newsPublic: return "Free - no setup needed"
@@ -112,8 +112,10 @@ enum ConnectionMethod: String, Codable, Identifiable {
             return "envelope.badge.fill"
         case .slackBot, .discordBot:
             return "cpu"
-        case .twitterAPI, .grokAPI:
+        case .twitterAPI:
             return "key.fill"
+        case .techPulseClaude:
+            return "terminal.fill"
         case .marketsPublic, .newsPublic, .predictionsPublic:
             return "globe"
         }
@@ -122,11 +124,11 @@ enum ConnectionMethod: String, Codable, Identifiable {
     var complexity: Complexity {
         switch self {
         case .gmailMailApp, .slackDesktop, .discordDesktop, .imessageLocal,
-             .marketsPublic, .newsPublic, .predictionsPublic:
+             .marketsPublic, .newsPublic, .predictionsPublic, .techPulseClaude:
             return .easy
         case .gmailOAuth, .slackOAuth, .twitterOAuth, .discordUserToken:
             return .medium
-        case .gmailIMAP, .slackBot, .discordBot, .twitterAPI, .grokAPI:
+        case .gmailIMAP, .slackBot, .discordBot, .twitterAPI:
             return .advanced
         }
     }
@@ -143,7 +145,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
     var requiresCredentials: Bool {
         switch self {
         case .gmailMailApp, .slackDesktop, .discordDesktop, .imessageLocal,
-             .marketsPublic, .newsPublic, .predictionsPublic:
+             .marketsPublic, .newsPublic, .predictionsPublic, .techPulseClaude:
             return false
         default:
             return true
@@ -205,10 +207,8 @@ enum ConnectionMethod: String, Codable, Identifiable {
                 CredentialFieldInfo(key: "bearer_token", label: "Bearer Token", isSecret: true, placeholder: "")
             ]
 
-        case .grokAPI:
-            return [
-                CredentialFieldInfo(key: "api_key", label: "API Key", isSecret: true, placeholder: "xai-...")
-            ]
+        case .techPulseClaude:
+            return [] // Uses Claude CLI - no credentials needed
 
         case .marketsPublic, .newsPublic, .predictionsPublic:
             return [] // No credentials needed
@@ -227,8 +227,8 @@ enum ConnectionMethod: String, Codable, Identifiable {
             return URL(string: "https://discord.com/developers/applications")
         case .twitterOAuth, .twitterAPI:
             return URL(string: "https://developer.twitter.com/en/portal/dashboard")
-        case .grokAPI:
-            return URL(string: "https://console.x.ai")
+        case .techPulseClaude:
+            return nil // No setup needed - uses Claude CLI
         case .marketsPublic, .newsPublic, .predictionsPublic:
             return nil // No setup needed
         default:
@@ -262,8 +262,8 @@ enum ConnectionMethod: String, Codable, Identifiable {
             return "Create an app in the Twitter Developer Portal with OAuth 2.0"
         case .twitterAPI:
             return "Get API keys from Twitter Developer Portal (may require approval)"
-        case .grokAPI:
-            return "Get your API key from the xAI console"
+        case .techPulseClaude:
+            return "AI-generated tech insights using Claude CLI"
 
         case .marketsPublic:
             return "Live market data from Yahoo Finance and CoinGecko"
@@ -315,7 +315,7 @@ extension Platform {
         case .twitter:
             return [.twitterOAuth, .twitterAPI]
         case .grok:
-            return [.grokAPI]
+            return [.techPulseClaude]
         case .markets:
             return [.marketsPublic]
         case .news:

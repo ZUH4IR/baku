@@ -29,9 +29,9 @@ class SettingsManager: ObservableObject {
         let savedPlatforms = Defaults[.enabledPlatforms]
         enabledPlatforms = Set(savedPlatforms.compactMap { Platform(rawValue: $0) })
 
-        // Auto-enable free info pulse platforms (markets, news, predictions)
-        // These don't require any setup so should always be available
-        let freeInfoPulses: [Platform] = [.markets, .news, .predictions]
+        // Auto-enable info pulse platforms that don't require manual setup
+        // These use Claude CLI or free public APIs
+        let freeInfoPulses: [Platform] = [.grok, .markets, .news, .predictions]
         for platform in freeInfoPulses {
             if !enabledPlatforms.contains(platform) {
                 enabledPlatforms.insert(platform)
@@ -177,9 +177,8 @@ class SettingsManager: ObservableObject {
             }
 
         case .grok:
-            if let apiKey = getCredential(platform: platform, key: "api_key") {
-                env["GROK_API_KEY"] = apiKey
-            }
+            // Tech Pulse uses Claude CLI - no credentials needed
+            break
 
         case .imessage:
             // No credentials - reads from local SQLite database
@@ -257,10 +256,10 @@ class SettingsManager: ObservableObject {
         switch platform {
         case .gmail: keys = ["client_id", "client_secret", "access_token", "refresh_token"]
         case .slack: keys = ["bot_token", "app_token"]
-        case .discord: keys = ["token"]
+        case .discord: keys = ["user_token", "token"]
         case .imessage: keys = [] // No credentials - local database access
         case .twitter: keys = ["api_key", "api_secret", "access_token", "access_secret"]
-        case .grok: keys = ["api_key"]
+        case .grok: keys = [] // Uses Claude CLI - no credentials
         case .markets, .news, .predictions: keys = [] // No credentials
         }
 
@@ -273,10 +272,11 @@ class SettingsManager: ObservableObject {
 // MARK: - Defaults Keys
 
 extension Defaults.Keys {
-    // Default platforms: Gmail, Slack, and free info pulses (Markets, News, Predictions)
+    // Default platforms: Gmail, Slack, and info pulses (Tech Pulse, Markets, News, Predictions)
     static let enabledPlatforms = Key<[String]>("enabledPlatforms", default: [
         Platform.gmail.rawValue,
         Platform.slack.rawValue,
+        Platform.grok.rawValue,
         Platform.markets.rawValue,
         Platform.news.rawValue,
         Platform.predictions.rawValue

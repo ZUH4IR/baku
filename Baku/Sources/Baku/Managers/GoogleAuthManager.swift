@@ -1,171 +1,277 @@
 import Foundation
-import GoogleSignIn
-import AppKit
+import os.log
 
-/// Manages Google Sign-In for Gmail OAuth authentication
+private let googleAuthLogger = Logger(subsystem: "com.baku.app", category: "GoogleAuthManager")
+
+/// Manages Google OAuth authentication using browser-based flow
 @MainActor
 class GoogleAuthManager: ObservableObject {
     static let shared = GoogleAuthManager()
 
-    @Published var isSignedIn = false
+    @Published var isAuthenticating = false
     @Published var userEmail: String?
     @Published var error: String?
 
     private let settings = SettingsManager.shared
 
-    // Gmail API scopes needed for reading/sending email
-    private let gmailScopes = [
-        "https://www.googleapis.com/auth/gmail.readonly",
-        "https://www.googleapis.com/auth/gmail.send",
-        "https://www.googleapis.com/auth/gmail.modify"
-    ]
+    /// Start the OAuth flow using saved/entered credentials
+    func signIn() async throws {
+        // Try to get credentials from keychain first, then fall back to temporary storage
+        let clientId = settings.getCredential(platform: .gmail, key: "client_id") ?? ""
+        let clientSecret = settings.getCredential(platform: .gmail, key: "client_secret") ?? ""
 
-    init() {
-        // Check for existing sign-in
-        restorePreviousSignIn()
+        guard !clientId.isEmpty, !clientSecret.isEmpty else {
+            throw GoogleAuthError.noCredentials
+        }
+        _ = try await signIn(clientId: clientId, clientSecret: clientSecret)
     }
 
-    // MARK: - Sign In
+    /// Start the OAuth flow - opens browser for user to sign in
+    func signIn(clientId: String, clientSecret: String) async throws -> GoogleAuthTokens {
+        isAuthenticating = true
+        error = nil
+        defer { isAuthenticating = false }
 
-    /// Sign in with Google using the native SDK
-    func signIn() async throws {
-        guard let window = NSApplication.shared.keyWindow else {
-            throw GoogleAuthError.noWindow
+        googleAuthLogger.info("Starting Google OAuth flow")
+
+        // Find the auth helper script
+        guard let scriptPath = findAuthScript() else {
+            let err = "Auth helper script not found"
+            error = err
+            throw GoogleAuthError.scriptNotFound
         }
 
-        // Configure with stored client ID or use default
-        let clientID = settings.getCredential(platform: .gmail, key: "client_id")
-            ?? Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String
+        googleAuthLogger.info("Using auth script at: \(scriptPath)")
 
-        guard let clientID = clientID, !clientID.isEmpty else {
-            throw GoogleAuthError.missingClientID
-        }
+        // Run the auth helper
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [
+            "node",
+            scriptPath,
+            "--client-id", clientId,
+            "--client-secret", clientSecret
+        ]
 
-        let config = GIDConfiguration(clientID: clientID)
-        GIDSignIn.sharedInstance.configuration = config
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
 
         do {
-            let result = try await GIDSignIn.sharedInstance.signIn(
-                withPresenting: window,
-                hint: nil,
-                additionalScopes: gmailScopes
-            )
-
-            await handleSignInResult(result)
+            try process.run()
         } catch {
-            throw GoogleAuthError.signInFailed(error.localizedDescription)
+            googleAuthLogger.error("Failed to run auth script: \(error.localizedDescription)")
+            self.error = "Failed to start authentication"
+            throw GoogleAuthError.processError(error.localizedDescription)
         }
+
+        // Wait for completion (with timeout)
+        let timeoutTask = Task {
+            try await Task.sleep(nanoseconds: 5 * 60 * 1_000_000_000) // 5 minutes
+            if process.isRunning {
+                process.terminate()
+            }
+        }
+
+        process.waitUntilExit()
+        timeoutTask.cancel()
+
+        // Read output
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+
+        if let errorOutput = String(data: errorData, encoding: .utf8), !errorOutput.isEmpty {
+            googleAuthLogger.info("Auth script stderr: \(errorOutput)")
+        }
+
+        guard let outputString = String(data: outputData, encoding: .utf8),
+              !outputString.isEmpty else {
+            error = "No response from authentication"
+            throw GoogleAuthError.noResponse
+        }
+
+        googleAuthLogger.info("Auth script output received")
+
+        // Parse JSON response
+        guard let jsonData = outputString.data(using: .utf8) else {
+            error = "Invalid response format"
+            throw GoogleAuthError.invalidResponse
+        }
+
+        // Check for error response
+        if let errorResponse = try? JSONDecoder().decode(GoogleAuthErrorResponse.self, from: jsonData),
+           errorResponse.error != nil {
+            error = errorResponse.message ?? "Authentication failed"
+            throw GoogleAuthError.authFailed(errorResponse.message ?? "Unknown error")
+        }
+
+        // Parse tokens
+        let tokens = try JSONDecoder().decode(GoogleAuthTokens.self, from: jsonData)
+
+        // Save tokens
+        saveTokens(tokens, clientId: clientId, clientSecret: clientSecret)
+
+        // Fetch user info
+        await fetchUserInfo(accessToken: tokens.accessToken)
+
+        googleAuthLogger.info("Google OAuth completed successfully")
+        return tokens
     }
 
-    /// Handle successful sign-in
-    private func handleSignInResult(_ result: GIDSignInResult) async {
-        let user = result.user
-
-        // Store tokens securely
-        if let accessToken = user.accessToken.tokenString as String? {
-            settings.setCredential(platform: .gmail, key: "access_token", value: accessToken)
+    /// Refresh the access token using the refresh token
+    func refreshAccessToken() async throws -> String {
+        guard let refreshToken = settings.getCredential(platform: .gmail, key: "refresh_token"),
+              let clientId = settings.getCredential(platform: .gmail, key: "client_id"),
+              let clientSecret = settings.getCredential(platform: .gmail, key: "client_secret") else {
+            throw GoogleAuthError.noRefreshToken
         }
 
-        if let refreshToken = user.refreshToken.tokenString as String? {
+        var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        let body = [
+            "client_id": clientId,
+            "client_secret": clientSecret,
+            "refresh_token": refreshToken,
+            "grant_type": "refresh_token"
+        ]
+        request.httpBody = body.map { "\($0.key)=\($0.value)" }.joined(separator: "&").data(using: .utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw GoogleAuthError.refreshFailed
+        }
+
+        struct RefreshResponse: Codable {
+            let accessToken: String
+            let expiresIn: Int
+
+            enum CodingKeys: String, CodingKey {
+                case accessToken = "access_token"
+                case expiresIn = "expires_in"
+            }
+        }
+
+        let refreshResponse = try JSONDecoder().decode(RefreshResponse.self, from: data)
+        settings.setCredential(platform: .gmail, key: "access_token", value: refreshResponse.accessToken)
+
+        return refreshResponse.accessToken
+    }
+
+    /// Sign out - clear all tokens
+    func signOut() {
+        settings.clearAllCredentials(for: .gmail)
+        userEmail = nil
+        googleAuthLogger.info("Signed out of Google")
+    }
+
+    /// Check if user is signed in
+    var isSignedIn: Bool {
+        settings.getCredential(platform: .gmail, key: "access_token") != nil
+    }
+
+    // MARK: - Private
+
+    private func findAuthScript() -> String? {
+        let possiblePaths = [
+            // Development path
+            "/Users/zuhair/conductor/workspaces/zuhair-helper/baku/mcp-servers/auth-helper/src/google-auth.js",
+            // Relative to bundle
+            Bundle.main.bundlePath + "/../../../../../mcp-servers/auth-helper/src/google-auth.js"
+        ]
+
+        for path in possiblePaths {
+            if FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        }
+
+        return nil
+    }
+
+    private func saveTokens(_ tokens: GoogleAuthTokens, clientId: String, clientSecret: String) {
+        settings.setCredential(platform: .gmail, key: "access_token", value: tokens.accessToken)
+        if let refreshToken = tokens.refreshToken {
             settings.setCredential(platform: .gmail, key: "refresh_token", value: refreshToken)
         }
-
-        // Store user email
-        if let email = user.profile?.email {
-            settings.setCredential(platform: .gmail, key: "email", value: email)
-            userEmail = email
-        }
-
-        isSignedIn = true
-        error = nil
-
-        // Update connection method to OAuth
-        settings.setConnectionMethod(.gmailOAuth, for: .gmail)
-        settings.setPlatformEnabled(.gmail, enabled: true)
+        settings.setCredential(platform: .gmail, key: "client_id", value: clientId)
+        settings.setCredential(platform: .gmail, key: "client_secret", value: clientSecret)
     }
 
-    // MARK: - Restore Previous Sign In
+    private func fetchUserInfo(accessToken: String) async {
+        var request = URLRequest(url: URL(string: "https://www.googleapis.com/oauth2/v2/userinfo")!)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
-    /// Check for and restore previous sign-in
-    func restorePreviousSignIn() {
-        GIDSignIn.sharedInstance.restorePreviousSignIn { [weak self] user, error in
-            Task { @MainActor in
-                if let user = user {
-                    self?.userEmail = user.profile?.email
-                    self?.isSignedIn = true
-                } else {
-                    self?.isSignedIn = false
-                }
-            }
-        }
-    }
-
-    // MARK: - Sign Out
-
-    func signOut() {
-        GIDSignIn.sharedInstance.signOut()
-
-        // Clear stored credentials
-        settings.deleteCredential(platform: .gmail, key: "access_token")
-        settings.deleteCredential(platform: .gmail, key: "refresh_token")
-        settings.deleteCredential(platform: .gmail, key: "email")
-
-        isSignedIn = false
-        userEmail = nil
-    }
-
-    // MARK: - Get Access Token
-
-    /// Get a fresh access token for API calls
-    func getAccessToken() async throws -> String {
-        guard let user = GIDSignIn.sharedInstance.currentUser else {
-            // Try to restore from stored tokens
-            if let storedToken = settings.getCredential(platform: .gmail, key: "access_token") {
-                return storedToken
-            }
-            throw GoogleAuthError.notSignedIn
-        }
-
-        // Refresh if needed
         do {
-            try await user.refreshTokensIfNeeded()
-            let token = user.accessToken.tokenString
-            settings.setCredential(platform: .gmail, key: "access_token", value: token)
-            return token
+            let (data, _) = try await URLSession.shared.data(for: request)
+            struct UserInfo: Codable {
+                let email: String?
+                let name: String?
+            }
+            let userInfo = try JSONDecoder().decode(UserInfo.self, from: data)
+            userEmail = userInfo.email
+            googleAuthLogger.info("Fetched user info: \(userInfo.email ?? "no email")")
         } catch {
-            throw GoogleAuthError.tokenRefreshFailed(error.localizedDescription)
+            googleAuthLogger.warning("Failed to fetch user info: \(error.localizedDescription)")
         }
-    }
-
-    // MARK: - Handle URL
-
-    /// Handle OAuth callback URL (for macOS URL scheme)
-    func handleURL(_ url: URL) -> Bool {
-        return GIDSignIn.sharedInstance.handle(url)
     }
 }
 
-// MARK: - Errors
+// MARK: - Models
+
+struct GoogleAuthTokens: Codable {
+    let accessToken: String
+    let refreshToken: String?
+    let expiresIn: Int?
+    let tokenType: String?
+    let scope: String?
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case expiresIn = "expires_in"
+        case tokenType = "token_type"
+        case scope
+    }
+}
+
+struct GoogleAuthErrorResponse: Codable {
+    let error: String?
+    let message: String?
+}
 
 enum GoogleAuthError: Error, LocalizedError {
-    case noWindow
-    case missingClientID
-    case signInFailed(String)
-    case notSignedIn
-    case tokenRefreshFailed(String)
+    case scriptNotFound
+    case processError(String)
+    case noResponse
+    case invalidResponse
+    case authFailed(String)
+    case noRefreshToken
+    case refreshFailed
+    case noCredentials
 
     var errorDescription: String? {
         switch self {
-        case .noWindow:
-            return "No window available for sign-in"
-        case .missingClientID:
-            return "Google Client ID not configured. Add it in Settings or Info.plist"
-        case .signInFailed(let message):
-            return "Sign-in failed: \(message)"
-        case .notSignedIn:
-            return "Not signed in to Google"
-        case .tokenRefreshFailed(let message):
-            return "Failed to refresh token: \(message)"
+        case .scriptNotFound:
+            return "Authentication helper not found"
+        case .processError(let msg):
+            return "Process error: \(msg)"
+        case .noResponse:
+            return "No response from authentication"
+        case .invalidResponse:
+            return "Invalid response format"
+        case .authFailed(let msg):
+            return msg
+        case .noRefreshToken:
+            return "No refresh token available"
+        case .refreshFailed:
+            return "Failed to refresh access token"
+        case .noCredentials:
+            return "Please enter Client ID and Client Secret first"
         }
     }
 }

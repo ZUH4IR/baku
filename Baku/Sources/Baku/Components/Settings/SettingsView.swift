@@ -601,80 +601,107 @@ struct PlatformConfigSheet: View {
                 .background(Color.green.opacity(0.1))
                 .cornerRadius(Design.cornerRadius)
             } else {
-                // Sign in button
-                VStack(spacing: 12) {
-                    Text("Sign in to access your Gmail")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                // Setup flow: credentials first, then sign-in
+                VStack(alignment: .leading, spacing: 16) {
+                    // Step 1: Get credentials
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("1. Create OAuth Credentials")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
 
-                    Button {
-                        Task {
-                            do {
-                                try await googleAuth.signIn()
-                                // Auto-save after successful sign-in
-                                save()
-                            } catch {
-                                credentials["error"] = error.localizedDescription
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "g.circle.fill")
-                                .font(.title2)
-                            Text("Sign in with Google")
-                                .font(.headline)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0.26, green: 0.52, blue: 0.96))
-
-                    if let errorMsg = credentials["error"] {
-                        Text(errorMsg)
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-
-                    Divider()
-                        .padding(.vertical, 8)
-
-                    // Manual setup option
-                    DisclosureGroup("Or set up manually with Client ID") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(selectedMethod.credentialFields) { field in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(field.label)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-
-                                    if field.isSecret {
-                                        SecureField(field.placeholder, text: binding(for: field.key))
-                                            .textFieldStyle(.roundedBorder)
-                                    } else {
-                                        TextField(field.placeholder, text: binding(for: field.key))
-                                            .textFieldStyle(.roundedBorder)
-                                    }
-                                }
-                            }
+                            Spacer()
 
                             if let url = selectedMethod.setupURL {
                                 Link(destination: url) {
                                     HStack(spacing: 4) {
-                                        Text("Create credentials in Google Cloud Console")
+                                        Text("Google Cloud Console")
                                         Image(systemName: "arrow.up.right")
                                     }
                                     .font(.caption)
                                 }
                             }
                         }
-                        .padding(.top, 8)
+
+                        ForEach(selectedMethod.credentialFields) { field in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(field.label)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+
+                                if field.isSecret {
+                                    SecureField(field.placeholder, text: binding(for: field.key))
+                                        .textFieldStyle(.roundedBorder)
+                                } else {
+                                    TextField(field.placeholder, text: binding(for: field.key))
+                                        .textFieldStyle(.roundedBorder)
+                                }
+                            }
+                        }
                     }
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+
+                    Divider()
+
+                    // Step 2: Sign in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("2. Sign in with Google")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+
+                        Text("Opens your browser to sign in - no copy/paste needed!")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Button {
+                            // Save credentials first
+                            for field in selectedMethod.credentialFields {
+                                if let value = credentials[field.key], !value.isEmpty {
+                                    settings.setCredential(platform: platform, key: field.key, value: value)
+                                }
+                            }
+
+                            Task {
+                                do {
+                                    try await googleAuth.signIn()
+                                    save()
+                                } catch {
+                                    credentials["error"] = error.localizedDescription
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if googleAuth.isAuthenticating {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                } else {
+                                    Image(systemName: "globe")
+                                        .font(.title2)
+                                }
+                                Text(googleAuth.isAuthenticating ? "Waiting for sign-in..." : "Sign in with Google")
+                                    .font(.headline)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color(red: 0.26, green: 0.52, blue: 0.96))
+                        .disabled(googleAuth.isAuthenticating || !hasRequiredCredentials)
+
+                        if let errorMsg = credentials["error"] {
+                            Text(errorMsg)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                    }
                 }
             }
         }
+    }
+
+    private var hasRequiredCredentials: Bool {
+        let clientId = credentials["client_id"] ?? ""
+        let clientSecret = credentials["client_secret"] ?? ""
+        return !clientId.isEmpty && !clientSecret.isEmpty
     }
 
     private var desktopIntegrationInfo: some View {

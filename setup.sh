@@ -26,8 +26,8 @@ PROJECT_DIR=$(pwd)
 
 echo -e "${GREEN}📦 Installing MCP server dependencies...${NC}"
 
-# Install MCP servers
-for server in gmail-mcp slack-mcp discord-mcp twitter-mcp grok-mcp markets-mcp news-mcp predictions-mcp; do
+# Install MCP servers (grok uses Claude CLI, not MCP)
+for server in gmail-mcp slack-mcp discord-mcp twitter-mcp markets-mcp news-mcp predictions-mcp; do
     if [ -d "mcp-servers/$server" ]; then
         echo "  → Installing $server..."
         cd "mcp-servers/$server"
@@ -66,11 +66,11 @@ echo ""
 echo "To connect platforms, you'll need API credentials:"
 echo "  - Gmail: Create OAuth app at https://console.cloud.google.com"
 echo "  - Slack: Create app at https://api.slack.com/apps"
-echo "  - Discord: Create bot at https://discord.com/developers"
+echo "  - Discord: Use your account token (get from browser DevTools)"
 echo "  - Twitter: Apply at https://developer.twitter.com"
-echo "  - Tech Pulse (Grok): Get API key at https://console.x.ai"
 echo ""
-echo "No credentials needed for:"
+echo "No credentials needed for (uses Claude Code or free APIs):"
+echo "  - Tech Pulse (uses Claude CLI)"
 echo "  - Markets (Yahoo Finance + CoinGecko)"
 echo "  - News (RSS feeds)"
 echo "  - Predictions (Polymarket)"

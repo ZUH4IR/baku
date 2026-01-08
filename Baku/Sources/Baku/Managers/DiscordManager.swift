@@ -96,9 +96,14 @@ class DiscordManager: ObservableObject {
 
     /// Fetch messages from selected sources
     func fetchMessages() async throws -> [Message] {
+        discordLogger.info("fetchMessages() called")
+
         guard let token = settings.getCredential(platform: .discord, key: "user_token") else {
+            discordLogger.error("No Discord user token found in keychain")
             throw DiscordError.noToken
         }
+
+        discordLogger.info("Got Discord token (length: \(token.count))")
 
         isLoading = true
         defer { isLoading = false }
@@ -110,7 +115,8 @@ class DiscordManager: ObservableObject {
         let selectedDMIds = settings.getDiscordSelectedDMs()
         let includeDMs = settings.discordIncludeDMs
 
-        discordLogger.info("Fetching from \(selectedGuildIds.count) guilds, DMs enabled: \(includeDMs)")
+        discordLogger.info("Selected guilds: \(selectedGuildIds.count) - IDs: \(Array(selectedGuildIds))")
+        discordLogger.info("Selected DMs: \(selectedDMIds.count), Include DMs: \(includeDMs)")
 
         // Fetch from selected guilds
         for guildId in selectedGuildIds {
@@ -122,20 +128,28 @@ class DiscordManager: ObservableObject {
             }
         }
 
-        // Fetch from DMs if enabled
+        // Always fetch DMs by default (primary Discord content)
         if includeDMs {
-            for dmId in selectedDMIds {
-                do {
-                    let dmMessages = try await fetchChannelMessages(channelId: dmId, token: token)
-                    messages.append(contentsOf: dmMessages)
-                } catch {
-                    discordLogger.warning("Failed to fetch from DM \(dmId): \(error.localizedDescription)")
-                }
+            // Ensure we have DM channels loaded
+            if dmChannels.isEmpty {
+                discordLogger.info("Loading DM channels...")
+                _ = try? await fetchDMChannels()
             }
 
-            // If no specific DMs selected, fetch from all recent DMs
-            if selectedDMIds.isEmpty {
-                for dm in dmChannels.prefix(5) {
+            if !selectedDMIds.isEmpty {
+                // Fetch from specifically selected DMs
+                for dmId in selectedDMIds {
+                    do {
+                        let dmMessages = try await fetchChannelMessages(channelId: dmId, token: token)
+                        messages.append(contentsOf: dmMessages)
+                    } catch {
+                        discordLogger.warning("Failed to fetch from DM \(dmId): \(error.localizedDescription)")
+                    }
+                }
+            } else {
+                // Fetch from recent DMs by default
+                discordLogger.info("Fetching from \(self.dmChannels.count) recent DM channels")
+                for dm in self.dmChannels.prefix(5) {
                     do {
                         let dmMessages = try await fetchChannelMessages(channelId: dm.id, token: token)
                         messages.append(contentsOf: dmMessages)
@@ -144,6 +158,27 @@ class DiscordManager: ObservableObject {
                     }
                 }
             }
+        }
+
+        // Add hint message if no servers selected
+        if selectedGuildIds.isEmpty && messages.isEmpty {
+            messages.append(Message(
+                id: "discord:hint:\(UUID().uuidString)",
+                platform: .discord,
+                platformMessageId: "hint",
+                senderName: "Discord",
+                senderHandle: nil,
+                senderAvatarURL: nil,
+                subject: nil,
+                content: "No servers selected. Go to Settings → Discord to select servers to monitor.",
+                timestamp: Date(),
+                channelName: "Setup",
+                threadId: nil,
+                priority: .low,
+                needsResponse: false,
+                isRead: false,
+                draft: nil
+            ))
         }
 
         // Sort by timestamp
@@ -155,6 +190,8 @@ class DiscordManager: ObservableObject {
 
     /// Fetch messages from a guild (server) - gets from channels with unread mentions
     private func fetchGuildMessages(guildId: String, token: String) async throws -> [Message] {
+        discordLogger.info("Fetching channels for guild: \(guildId)")
+
         // Get guild channels
         let channelsURL = URL(string: "\(baseURL)/guilds/\(guildId)/channels")!
         var request = URLRequest(url: channelsURL)
@@ -162,7 +199,16 @@ class DiscordManager: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            discordLogger.error("Invalid response for guild \(guildId) channels")
+            return []
+        }
+
+        if httpResponse.statusCode != 200 {
+            discordLogger.error("Guild \(guildId) channels returned status \(httpResponse.statusCode)")
+            if let errorText = String(data: data, encoding: .utf8) {
+                discordLogger.error("Error response: \(errorText)")
+            }
             return []
         }
 
@@ -172,15 +218,19 @@ class DiscordManager: ObservableObject {
 
         // Get text channels only
         let textChannels = channels.filter { $0.type == 0 }
+        discordLogger.info("Guild \(guildId): found \(channels.count) channels, \(textChannels.count) text channels")
 
         var messages: [Message] = []
 
         // Fetch from first few text channels
         for channel in textChannels.prefix(3) {
+            discordLogger.info("Fetching messages from channel: \(channel.name ?? channel.id)")
             let channelMessages = try await fetchChannelMessages(channelId: channel.id, token: token, guildName: channel.name)
+            discordLogger.info("Got \(channelMessages.count) messages from \(channel.name ?? channel.id)")
             messages.append(contentsOf: channelMessages)
         }
 
+        discordLogger.info("Guild \(guildId) total messages: \(messages.count)")
         return messages
     }
 
@@ -192,7 +242,13 @@ class DiscordManager: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            discordLogger.error("Invalid response fetching messages from channel \(channelId)")
+            return []
+        }
+
+        if httpResponse.statusCode != 200 {
+            discordLogger.error("Channel \(channelId) messages returned status \(httpResponse.statusCode)")
             return []
         }
 

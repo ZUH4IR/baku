@@ -56,6 +56,13 @@ class InboxManager: ObservableObject {
             return
         }
 
+        // Tech Pulse uses Claude CLI - no MCP server needed
+        if method == .techPulseClaude {
+            connectedPlatforms.insert(platform)
+            inboxLogger.info("Using Claude CLI for \(platform.displayName)")
+            return
+        }
+
         // Free public API platforms - connect via MCP but no credentials needed
         if !method.requiresCredentials && platform.isInfoPulse {
             // Try to start MCP server for info pulse
@@ -200,14 +207,24 @@ class InboxManager: ObservableObject {
     func fetchFromPlatform(_ platform: Platform) async throws -> [Message] {
         let method = settings.getConnectionMethod(for: platform)
 
+        inboxLogger.info("fetchFromPlatform: \(platform.displayName) using method: \(method.displayName)")
+
         // Use Discord user token if configured
         if method == .discordUserToken {
-            return try await DiscordManager.shared.fetchMessages()
+            inboxLogger.info("Calling DiscordManager.fetchMessages()")
+            let messages = try await DiscordManager.shared.fetchMessages()
+            inboxLogger.info("DiscordManager returned \(messages.count) messages")
+            return messages
         }
 
         // Use desktop integration if configured
         if method.isDesktopIntegration {
             return try await fetchViaDesktop(platform: platform, method: method)
+        }
+
+        // Tech Pulse uses Claude CLI
+        if method == .techPulseClaude {
+            return try await fetchTechPulse()
         }
 
         // Use MCP server
@@ -224,6 +241,59 @@ class InboxManager: ObservableObject {
         }
 
         return try parseMessages(from: data, platform: platform)
+    }
+
+    /// Fetch Tech Pulse using Claude CLI
+    private func fetchTechPulse() async throws -> [Message] {
+        let prompt = """
+        Generate a brief tech pulse for this morning. Include:
+        1. One major AI/ML development or announcement
+        2. One notable tech company news
+        3. One interesting open source or developer tool update
+
+        Format as a short bulleted list. Be concise (2-3 sentences per item max).
+        Only include things that would be happening around January 2025.
+        """
+
+        do {
+            let response = try await ClaudeManager.shared.callClaudeForPulse(prompt: prompt)
+            return [Message(
+                id: "grok:\(UUID().uuidString)",
+                platform: .grok,
+                platformMessageId: "pulse",
+                senderName: "Tech Pulse",
+                senderHandle: nil,
+                senderAvatarURL: nil,
+                subject: "Morning Tech Briefing",
+                content: response,
+                timestamp: Date(),
+                channelName: nil,
+                threadId: nil,
+                priority: .low,
+                needsResponse: false,
+                isRead: false,
+                draft: nil
+            )]
+        } catch {
+            inboxLogger.error("Failed to generate tech pulse: \(error.localizedDescription)")
+            return [Message(
+                id: "grok:\(UUID().uuidString)",
+                platform: .grok,
+                platformMessageId: "pulse",
+                senderName: "Tech Pulse",
+                senderHandle: nil,
+                senderAvatarURL: nil,
+                subject: "Morning Tech Briefing",
+                content: "Unable to generate tech pulse. Make sure Claude Code is installed.",
+                timestamp: Date(),
+                channelName: nil,
+                threadId: nil,
+                priority: .low,
+                needsResponse: false,
+                isRead: false,
+                draft: nil
+            )]
+        }
     }
 
     /// Fetch via desktop app integration
