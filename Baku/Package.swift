@@ -24,7 +24,10 @@ let package = Package(
                 .product(name: "LaunchAtLogin", package: "LaunchAtLogin-Modern"),
                 .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS"),
             ],
-            path: "Sources/Baku"
+            path: "Sources/Baku",
+            resources: [
+                .copy("Resources/Icons")
+            ]
         )
     ]
 )

@@ -31,6 +31,22 @@ enum Platform: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    /// SVG icon name (from bundled simple-icons)
+    var svgIconName: String {
+        switch self {
+        case .gmail: return "gmail"
+        case .slack: return "slack"
+        case .discord: return "discord"
+        case .twitter: return "x"
+        case .imessage: return "imessage"
+        case .grok: return "grok"
+        case .markets: return "markets"
+        case .news: return "news"
+        case .predictions: return "predictions"
+        }
+    }
+
+    /// SF Symbol fallback icon name
     var iconName: String {
         switch self {
         case .gmail: return "envelope.fill"
