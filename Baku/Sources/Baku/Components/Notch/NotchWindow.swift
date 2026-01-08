@@ -28,9 +28,9 @@ class NotchWindow: NSPanel {
     }
 
     private func configureWindow() {
-        // Window behavior - floating above other windows
-        isFloatingPanel = true
-        level = .floating
+        // Window behavior - normal window that can go behind others
+        isFloatingPanel = false
+        level = .normal
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         // Appearance

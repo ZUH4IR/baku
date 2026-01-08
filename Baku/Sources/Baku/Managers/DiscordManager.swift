@@ -49,7 +49,6 @@ class DiscordManager: ObservableObject {
         }
 
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         guilds = try decoder.decode([DiscordGuild].self, from: data)
 
         discordLogger.info("Fetched \(self.guilds.count) guilds")
@@ -84,7 +83,6 @@ class DiscordManager: ObservableObject {
         }
 
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         let channels = try decoder.decode([DiscordDMChannel].self, from: data)
 
         // Filter to DM and group DM channels only
@@ -236,7 +234,6 @@ class DiscordManager: ObservableObject {
         }
 
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         let channels = try decoder.decode([DiscordChannel].self, from: data)
 
         // Get text channels only
@@ -272,32 +269,51 @@ class DiscordManager: ObservableObject {
 
         if httpResponse.statusCode != 200 {
             discordLogger.error("Channel \(channelId) messages returned status \(httpResponse.statusCode)")
+            if let errorText = String(data: data, encoding: .utf8) {
+                discordLogger.error("Error response: \(errorText.prefix(500))")
+            }
             return []
         }
 
+        // Try to decode with better error handling
+        // Note: Using explicit CodingKeys in models, not automatic snake_case conversion
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let discordMessages = try decoder.decode([DiscordAPIMessage].self, from: data)
 
-        return discordMessages.map { msg in
-            Message(
-                id: "discord:\(msg.id)",
-                platform: .discord,
-                platformMessageId: msg.id,
-                senderName: msg.author.globalName ?? msg.author.username,
-                senderHandle: "@\(msg.author.username)",
-                senderAvatarURL: msg.author.avatarURL,
-                subject: nil,
-                content: msg.content,
-                timestamp: msg.timestamp,
-                channelName: guildName ?? channelId,
-                threadId: nil,
-                priority: .low,
-                needsResponse: true,
-                isRead: false,
-                draft: nil
-            )
+        let discordMessages: [DiscordAPIMessage]
+        do {
+            discordMessages = try decoder.decode([DiscordAPIMessage].self, from: data)
+        } catch {
+            // Log the raw response to help debug
+            if let rawJson = String(data: data, encoding: .utf8) {
+                discordLogger.error("Failed to decode messages from channel \(channelId): \(error.localizedDescription)")
+                discordLogger.error("Raw response (first 1000 chars): \(rawJson.prefix(1000))")
+            }
+            throw error
         }
+
+        // Filter to only user messages with content and author
+        return discordMessages
+            .filter { $0.isUserMessage && !$0.content.isEmpty }
+            .compactMap { msg -> Message? in
+                guard let author = msg.author else { return nil }
+                return Message(
+                    id: "discord:\(msg.id)",
+                    platform: .discord,
+                    platformMessageId: msg.id,
+                    senderName: author.globalName ?? author.username,
+                    senderHandle: "@\(author.username)",
+                    senderAvatarURL: author.avatarURL,
+                    subject: nil,
+                    content: msg.content,
+                    timestamp: msg.timestamp,
+                    channelName: guildName ?? channelId,
+                    threadId: nil,
+                    priority: .low,
+                    needsResponse: true,
+                    isRead: false,
+                    draft: nil
+                )
+            }
     }
 
     /// Test the token by fetching user info
@@ -321,7 +337,6 @@ class DiscordManager: ObservableObject {
         }
 
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(DiscordUser.self, from: data)
     }
 }
@@ -374,26 +389,46 @@ struct DiscordUser: Codable, Identifiable {
         guard let avatar = avatar else { return nil }
         return URL(string: "https://cdn.discordapp.com/avatars/\(id)/\(avatar).png")
     }
+
+    // Provide fallback decoding for edge cases
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        // Username might be missing for some webhook/system messages
+        username = try container.decodeIfPresent(String.self, forKey: .username) ?? "Unknown"
+        globalName = try container.decodeIfPresent(String.self, forKey: .globalName)
+        avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+        discriminator = try container.decodeIfPresent(String.self, forKey: .discriminator)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, username, avatar, discriminator
+        case globalName = "global_name"
+    }
 }
 
 struct DiscordAPIMessage: Codable {
     let id: String
     let content: String
-    let author: DiscordUser
+    let author: DiscordUser?  // Optional - some system messages may not have author
     let timestamp: Date
     let channelId: String
+    let type: Int // 0 = default, 1 = recipient add, etc.
 
     enum CodingKeys: String, CodingKey {
-        case id, content, author, timestamp
+        case id, content, author, timestamp, type
         case channelId = "channel_id"
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        content = try container.decode(String.self, forKey: .content)
-        author = try container.decode(DiscordUser.self, forKey: .author)
+        // Content can be empty string or missing for attachment-only messages
+        content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        // Author can be missing for some system messages
+        author = try container.decodeIfPresent(DiscordUser.self, forKey: .author)
         channelId = try container.decode(String.self, forKey: .channelId)
+        type = try container.decodeIfPresent(Int.self, forKey: .type) ?? 0
 
         // Parse Discord timestamp format
         let timestampString = try container.decode(String.self, forKey: .timestamp)
@@ -405,6 +440,11 @@ struct DiscordAPIMessage: Codable {
             formatter.formatOptions = [.withInternetDateTime]
             timestamp = formatter.date(from: timestampString) ?? Date()
         }
+    }
+
+    /// Whether this is a regular user message (not system message)
+    var isUserMessage: Bool {
+        author != nil && (type == 0 || type == 19) // default or reply, with an author
     }
 }
 

@@ -161,7 +161,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] notification in
             if let window = notification.object as? NSWindow,
                window.title.contains("Settings") || window.identifier?.rawValue.contains("settings") == true {
-                self?.notchWindow?.level = .floating
+                // Keep normal level - don't force floating
+                self?.notchWindow?.level = .normal
             }
         }
     }
