@@ -507,13 +507,19 @@ private struct RepairSheet: View {
 
             Divider()
 
-            // Status
+            // Status - shows current action like Claude Code does
             HStack(spacing: 8) {
                 if claudeManager.isRepairing {
                     ProgressView()
                         .scaleEffect(0.8)
-                    Text("Claude is analyzing and fixing the error...")
-                        .font(.subheadline)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(claudeManager.currentAction.isEmpty ? "Starting..." : claudeManager.currentAction)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Text("Claude Code is working...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 } else if let result = claudeManager.lastRepairResult {
                     Image(systemName: result.success ? "checkmark.circle.fill" : "xmark.circle.fill")
                         .foregroundColor(result.success ? .green : .red)
