@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Unique identifier for this LaunchAgent -->
+    <key>Label</key>
+    <string>com.baku.morning</string>
+
+    <!-- Path to the Baku app -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/Baku.app/Contents/MacOS/Baku</string>
+        <string>--fetch</string>
+    </array>
+
+    <!-- Run at 7:00 AM every day -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Don't run on load, only on schedule -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Keep the app running after fetch -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Log output for debugging -->
+    <key>StandardOutPath</key>
+    <string>/tmp/baku.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/baku.error.log</string>
+
+    <!-- Allow network access -->
+    <key>SessionType</key>
+    <string>Aqua</string>
+
+    <!-- Nice priority (lower = nicer) -->
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
