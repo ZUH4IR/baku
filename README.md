@@ -125,98 +125,189 @@ Each platform requires API credentials. Baku stores tokens securely in macOS Key
 
 1. **Create Google Cloud Project**
    - Go to [Google Cloud Console](https://console.cloud.google.com)
-   - Create a new project
-   - Enable the Gmail API
+   - Click the project dropdown (top bar) → **New Project**
+   - Name it something like "Baku Mail" → **Create**
+   - Wait for project creation, then select it from the dropdown
 
-2. **Create OAuth Credentials**
-   - Go to APIs & Services → Credentials
-   - Create OAuth 2.0 Client ID (Desktop app)
-   - Download the credentials JSON
+2. **Enable Gmail API**
+   - Go to **APIs & Services** → **Library**
+   - Search for "Gmail API"
+   - Click **Gmail API** → **Enable**
 
-3. **Set Environment Variables**
-   ```bash
-   export GMAIL_CLIENT_ID="your-client-id.apps.googleusercontent.com"
-   export GMAIL_CLIENT_SECRET="your-client-secret"
-   ```
+3. **Configure OAuth Consent Screen** (required before creating credentials)
+   - Go to **APIs & Services** → **OAuth consent screen**
+   - Choose **External** (unless you have Google Workspace)
+   - Fill in required fields:
+     - **App name**: `Baku`
+     - **User support email**: your email
+     - **Developer contact**: your email
+   - Click **Save and Continue**
+   - **Scopes**: Click **Add or Remove Scopes**
+     - Search and add: `https://www.googleapis.com/auth/gmail.readonly`
+     - Search and add: `https://www.googleapis.com/auth/gmail.send`
+     - Click **Update** → **Save and Continue**
+   - **Test users**: Click **Add Users** → add your Gmail address
+   - Click **Save and Continue** → **Back to Dashboard**
 
-4. **Authenticate**
-   - Open Baku settings → Click "Connect" next to Gmail
-   - Complete OAuth flow in browser
+4. **Create OAuth Credentials**
+   - Go to **APIs & Services** → **Credentials**
+   - Click **+ Create Credentials** → **OAuth client ID**
+   - **Application type**: Select **Desktop app**
+   - **Name**: `Baku Desktop` (or anything you like)
+   - Click **Create**
+   - A dialog shows your **Client ID** and **Client Secret** - copy these!
+
+5. **Enter Credentials in Baku**
+   - Open Baku → **Settings** → **Platforms** tab
+   - Click **Configure** next to Gmail
+   - Paste your **Client ID** and **Client Secret**
+   - Click **Save**
+
+6. **First-time Authentication**
+   - When Baku first tries to fetch Gmail, a browser window opens
+   - Sign in with your Google account
+   - Click **Continue** (ignore "unverified app" warning - it's your own app)
+   - Grant the requested permissions
+   - You're all set!
 
 ### Slack Setup
 
 1. **Create Slack App**
    - Go to [Slack API](https://api.slack.com/apps)
-   - Create New App → From scratch
+   - Click **Create New App** → **From scratch**
+   - **App Name**: `Baku`
+   - **Workspace**: Select your workspace
+   - Click **Create App**
 
-2. **Configure OAuth Scopes**
-   Add these Bot Token Scopes:
-   - `channels:history`
-   - `channels:read`
-   - `chat:write`
-   - `im:history`
-   - `im:read`
-   - `mpim:history`
-   - `mpim:read`
-   - `search:read`
-   - `users:read`
+2. **Configure Bot Token Scopes**
+   - In your app settings, go to **OAuth & Permissions**
+   - Scroll to **Scopes** → **Bot Token Scopes**
+   - Click **Add an OAuth Scope** and add each of these:
+     - `channels:history` - View messages in public channels
+     - `channels:read` - View basic channel info
+     - `chat:write` - Send messages
+     - `im:history` - View DM messages
+     - `im:read` - View DM list
+     - `mpim:history` - View group DM messages
+     - `mpim:read` - View group DM list
+     - `users:read` - View user profiles
 
-3. **Install to Workspace**
-   - OAuth & Permissions → Install to Workspace
-   - Copy the Bot User OAuth Token
+3. **Enable Socket Mode** (for real-time events)
+   - Go to **Socket Mode** in the sidebar
+   - Toggle **Enable Socket Mode** to On
+   - Give the token a name like `Baku Socket` → **Generate**
+   - Copy the **App-Level Token** (starts with `xapp-`)
 
-4. **Store Token**
-   The token is stored in Keychain when you connect via Baku settings.
+4. **Install to Workspace**
+   - Go to **OAuth & Permissions**
+   - Click **Install to Workspace** → **Allow**
+   - Copy the **Bot User OAuth Token** (starts with `xoxb-`)
+
+5. **Enter Credentials in Baku**
+   - Open Baku → **Settings** → **Platforms** tab
+   - Click **Configure** next to Slack
+   - **Bot Token**: Paste the `xoxb-...` token
+   - **App Token**: Paste the `xapp-...` token
+   - Click **Save**
 
 ### Discord Setup
 
 1. **Create Discord Application**
    - Go to [Discord Developer Portal](https://discord.com/developers/applications)
-   - Create New Application
+   - Click **New Application**
+   - **Name**: `Baku`
+   - Check the Terms of Service box → **Create**
 
 2. **Create Bot**
-   - Go to Bot section → Add Bot
-   - Enable these Privileged Intents:
-     - Message Content Intent
-     - Direct Messages Intent
+   - In your application, go to **Bot** in the sidebar
+   - Click **Add Bot** → **Yes, do it!**
+   - Under **Privileged Gateway Intents**, enable:
+     - ✅ **Message Content Intent** (to read message content)
+   - Click **Save Changes**
 
 3. **Get Bot Token**
-   - Bot section → Reset Token → Copy token
+   - On the **Bot** page, click **Reset Token**
+   - Confirm by clicking **Yes, do it!**
+   - Copy the token immediately (you won't see it again!)
 
-4. **Invite Bot to Server**
-   ```
-   https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=274877991936&scope=bot
-   ```
+4. **Invite Bot to Your Server**
+   - Go to **OAuth2** → **URL Generator**
+   - **Scopes**: Check `bot`
+   - **Bot Permissions**: Check these:
+     - ✅ Read Messages/View Channels
+     - ✅ Send Messages
+     - ✅ Read Message History
+   - Copy the **Generated URL** at the bottom
+   - Open it in your browser → Select your server → **Authorize**
 
-5. **Store Token**
-   Token is stored in Keychain when you connect via Baku settings.
+5. **Enter Credentials in Baku**
+   - Open Baku → **Settings** → **Platforms** tab
+   - Click **Configure** next to Discord
+   - **Bot Token**: Paste the token you copied
+   - Click **Save**
 
 ### Twitter/X Setup
 
+> ⚠️ **Note**: Twitter API access requires a developer account which may need approval and has usage limits. Free tier allows basic read access.
+
 1. **Apply for Developer Access**
    - Go to [Twitter Developer Portal](https://developer.twitter.com)
-   - Apply for access (may require approval)
+   - Click **Sign up for Free Account** or apply for elevated access
+   - Complete the application (describe your use case as "personal productivity tool")
+   - Wait for approval (usually instant for Free tier)
 
-2. **Create Project & App**
-   - Create a new Project
-   - Create an App within the project
-   - Set up User Authentication Settings:
-     - OAuth 1.0a
-     - Read and write permissions
+2. **Create a Project**
+   - Once approved, go to **Developer Portal** → **Projects & Apps**
+   - Click **+ Add Project**
+   - **Project name**: `Baku`
+   - **Use case**: Select "Making a bot" or "Exploring the API"
+   - Click **Next** through the prompts
 
-3. **Get API Keys**
-   - Keys and Tokens section
-   - Generate API Key and Secret
-   - Generate Access Token and Secret
+3. **Create an App within the Project**
+   - You'll be prompted to create an app
+   - **App name**: `Baku App` (must be unique across all of Twitter)
+   - Click **Complete**
 
-4. **Set Environment Variables**
-   ```bash
-   export TWITTER_API_KEY="your-api-key"
-   export TWITTER_API_SECRET="your-api-secret"
-   ```
+4. **Get API Keys**
+   - After creation, you'll see your keys - **copy them now!**
+   - **API Key** (also called Consumer Key)
+   - **API Key Secret** (also called Consumer Secret)
+   - If you missed them: Go to your app → **Keys and Tokens** → **Regenerate**
 
-5. **Authenticate**
-   Access tokens are stored in Keychain when you connect via Baku settings.
+5. **Set up User Authentication**
+   - Go to your app → **Settings** → **User authentication settings** → **Set up**
+   - **App permissions**: Select **Read and write**
+   - **Type of App**: Select **Native App**
+   - **Callback URI**: Enter `http://localhost:3000/callback`
+   - **Website URL**: Enter any URL (e.g., `https://github.com`)
+   - Click **Save**
+
+6. **Enter Credentials in Baku**
+   - Open Baku → **Settings** → **Platforms** tab
+   - Click **Configure** next to Twitter
+   - **API Key**: Paste your API Key
+   - **API Secret**: Paste your API Key Secret
+   - Click **Save**
+
+### Tech Pulse (Grok/xAI) Setup
+
+Tech Pulse uses xAI's Grok API to surface trending tech news and insights.
+
+1. **Get xAI API Access**
+   - Go to [xAI Console](https://console.x.ai)
+   - Sign up or log in with your X account
+   - Navigate to **API Keys**
+
+2. **Create API Key**
+   - Click **Create API Key**
+   - **Name**: `Baku`
+   - Copy the generated API key
+
+3. **Enter Credentials in Baku**
+   - Open Baku → **Settings** → **Platforms** tab
+   - Click **Configure** next to Tech Pulse
+   - **API Key**: Paste your xAI API key
+   - Click **Save**
 
 ---
 

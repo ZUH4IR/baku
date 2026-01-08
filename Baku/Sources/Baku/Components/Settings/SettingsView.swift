@@ -6,7 +6,6 @@ import LaunchAtLogin
 struct SettingsView: View {
     @StateObject private var settings = SettingsManager.shared
     @State private var selectedPlatform: Platform?
-    @State private var showingCredentialSheet = false
 
     var body: some View {
         TabView {
@@ -90,8 +89,8 @@ struct SettingsView: View {
 
                         if settings.isPlatformConfigured(platform) {
                             Button("Edit") {
+                                logger.info("Edit tapped for platform: \(platform.displayName)")
                                 selectedPlatform = platform
-                                showingCredentialSheet = true
                             }
                             .buttonStyle(.bordered)
 
@@ -104,9 +103,6 @@ struct SettingsView: View {
                             Button("Configure") {
                                 logger.info("Configure tapped for platform: \(platform.displayName)")
                                 selectedPlatform = platform
-                                logger.debug("selectedPlatform set to: \(String(describing: platform))")
-                                showingCredentialSheet = true
-                                logger.debug("showingCredentialSheet set to: true")
                             }
                             .buttonStyle(.borderedProminent)
                         }
@@ -161,6 +157,14 @@ struct SettingsView: View {
                 Text("Get your API key from console.anthropic.com")
                     .font(.caption)
                     .foregroundColor(.secondary)
+
+                HStack(spacing: 4) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.caption2)
+                    Text("Stored locally in your Mac's Keychain")
+                        .font(.caption2)
+                }
+                .foregroundColor(.secondary)
             }
 
             Section("Response Style") {
@@ -233,6 +237,14 @@ struct CredentialSheet: View {
                     Link("Get credentials", destination: url)
                         .font(.caption)
                 }
+
+                HStack(spacing: 4) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.caption2)
+                    Text("Credentials are stored locally in your Mac's Keychain")
+                        .font(.caption2)
+                }
+                .foregroundColor(.secondary)
             }
             .formStyle(.grouped)
             .padding()

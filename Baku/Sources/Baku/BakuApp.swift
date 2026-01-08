@@ -24,8 +24,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Show in dock so users can find the app
-        NSApp.setActivationPolicy(.regular)
+        // Menu bar only app - no dock icon
+        NSApp.setActivationPolicy(.accessory)
 
         // Initialize view model - start open so users see the app
         viewModel = BakuViewModel()
@@ -39,12 +39,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Setup keyboard shortcuts
         setupKeyboardShortcuts()
+
+        logger.info("Baku launched successfully")
     }
 
     // MARK: - Window Setup
 
     private func setupNotchWindow() {
-        guard let screen = NSScreen.main else { return }
+        // Prevent duplicate windows
+        guard notchWindow == nil else {
+            logger.warning("NotchWindow already exists, skipping creation")
+            return
+        }
+
+        guard let screen = NSScreen.main else {
+            logger.error("No main screen available")
+            return
+        }
 
         notchWindow = NotchWindow(
             contentRect: NotchWindow.initialFrame(for: screen),
@@ -58,6 +69,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let contentView = ContentView(viewModel: vm)
         window.contentView = NSHostingView(rootView: contentView)
         window.orderFrontRegardless()
+
+        logger.info("NotchWindow created and displayed")
     }
 
     // MARK: - Status Item
@@ -148,10 +161,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        Task { @MainActor in
-            viewModel?.open()
-            notchWindow?.orderFrontRegardless()
+        // For accessory apps, this is rarely called, but handle it gracefully
+        if !flag {
+            Task { @MainActor in
+                viewModel?.open()
+                notchWindow?.orderFrontRegardless()
+            }
         }
-        return true
+        return false
     }
 }
