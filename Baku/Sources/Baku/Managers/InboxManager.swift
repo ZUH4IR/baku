@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-/// Manages fetching messages from all connected platforms via MCP servers
+/// Manages fetching messages from all connected platforms
 @MainActor
 class InboxManager: ObservableObject {
     static let shared = InboxManager()
@@ -13,6 +13,7 @@ class InboxManager: ObservableObject {
 
     private var mcpClients: [Platform: MCPClient] = [:]
     private let settings = SettingsManager.shared
+    private let desktopManager = DesktopAppManager.shared
 
     // MARK: - Initialization
 
@@ -31,7 +32,20 @@ class InboxManager: ObservableObject {
     // MARK: - Platform Connection
 
     func connectPlatform(_ platform: Platform) async {
-        guard let serverPath = mcpServerPath(for: platform) else { return }
+        let method = settings.getConnectionMethod(for: platform)
+
+        // Desktop integrations don't need MCP connection
+        if method.isDesktopIntegration {
+            connectedPlatforms.insert(platform)
+            logger.info("Using desktop integration for \(platform.displayName)")
+            return
+        }
+
+        // MCP server connection
+        guard let serverPath = mcpServerPath(for: platform) else {
+            logger.warning("No MCP server found for \(platform.displayName)")
+            return
+        }
 
         let client = MCPClient(
             serverPath: serverPath,
@@ -42,8 +56,9 @@ class InboxManager: ObservableObject {
             try await client.start()
             mcpClients[platform] = client
             connectedPlatforms.insert(platform)
+            logger.info("Connected to \(platform.displayName) via MCP")
         } catch {
-            print("Failed to connect \(platform.displayName): \(error)")
+            logger.error("Failed to connect \(platform.displayName): \(error.localizedDescription)")
         }
     }
 
@@ -65,12 +80,10 @@ class InboxManager: ObservableObject {
 
         let serverPath = "\(basePath)/mcp-servers/\(platform.rawValue)-mcp/dist/index.js"
 
-        // Check if the server exists
         if FileManager.default.fileExists(atPath: serverPath) {
             return serverPath
         }
 
-        // Fallback to source for development
         let srcPath = "\(basePath)/mcp-servers/\(platform.rawValue)-mcp/src/index.ts"
         if FileManager.default.fileExists(atPath: srcPath) {
             return srcPath
@@ -114,6 +127,14 @@ class InboxManager: ObservableObject {
 
     /// Fetch messages from a specific platform
     func fetchFromPlatform(_ platform: Platform) async throws -> [Message] {
+        let method = settings.getConnectionMethod(for: platform)
+
+        // Use desktop integration if configured
+        if method.isDesktopIntegration {
+            return try await fetchViaDesktop(platform: platform, method: method)
+        }
+
+        // Use MCP server
         guard let client = mcpClients[platform] else {
             throw InboxError.notConnected(platform)
         }
@@ -127,6 +148,20 @@ class InboxManager: ObservableObject {
         }
 
         return try parseMessages(from: data, platform: platform)
+    }
+
+    /// Fetch via desktop app integration
+    private func fetchViaDesktop(platform: Platform, method: ConnectionMethod) async throws -> [Message] {
+        switch method {
+        case .gmailMailApp:
+            return try await desktopManager.fetchMailUnread()
+        case .slackDesktop:
+            return try await desktopManager.fetchSlackUnread()
+        case .discordDesktop:
+            return try await desktopManager.fetchDiscordUnread()
+        default:
+            return []
+        }
     }
 
     private func fetchToolName(for platform: Platform) -> String {

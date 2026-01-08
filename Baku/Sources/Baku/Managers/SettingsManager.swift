@@ -10,6 +10,7 @@ class SettingsManager: ObservableObject {
     // MARK: - Platform Settings
 
     @Published var enabledPlatforms: Set<Platform> = []
+    @Published var connectionMethods: [Platform: ConnectionMethod] = [:]
 
     // MARK: - Initialization
 
@@ -18,9 +19,33 @@ class SettingsManager: ObservableObject {
     }
 
     private func loadSettings() {
-        // Load enabled platforms from UserDefaults
+        // Load enabled platforms
         let savedPlatforms = Defaults[.enabledPlatforms]
         enabledPlatforms = Set(savedPlatforms.compactMap { Platform(rawValue: $0) })
+
+        // Load connection methods
+        let savedMethods = Defaults[.connectionMethods]
+        for (platformRaw, methodRaw) in savedMethods {
+            if let platform = Platform(rawValue: platformRaw),
+               let method = ConnectionMethod(rawValue: methodRaw) {
+                connectionMethods[platform] = method
+            }
+        }
+    }
+
+    // MARK: - Connection Methods
+
+    func getConnectionMethod(for platform: Platform) -> ConnectionMethod {
+        connectionMethods[platform] ?? platform.defaultConnectionMethod
+    }
+
+    func setConnectionMethod(_ method: ConnectionMethod, for platform: Platform) {
+        connectionMethods[platform] = method
+        objectWillChange.send()
+
+        var saved = Defaults[.connectionMethods]
+        saved[platform.rawValue] = method.rawValue
+        Defaults[.connectionMethods] = saved
     }
 
     // MARK: - Platform Configuration
@@ -39,18 +64,21 @@ class SettingsManager: ObservableObject {
     }
 
     func isPlatformConfigured(_ platform: Platform) -> Bool {
-        switch platform {
-        case .gmail:
-            return getCredential(platform: platform, key: "client_id") != nil
-        case .slack:
-            return getCredential(platform: platform, key: "bot_token") != nil
-        case .discord:
-            return getCredential(platform: platform, key: "token") != nil
-        case .twitter:
-            return getCredential(platform: platform, key: "api_key") != nil
-        case .grok:
-            return getCredential(platform: platform, key: "api_key") != nil
+        let method = getConnectionMethod(for: platform)
+
+        // Desktop integrations don't need credentials
+        if method.isDesktopIntegration {
+            return true
         }
+
+        // Check if all required credential fields are filled
+        for field in method.credentialFields {
+            if getCredential(platform: platform, key: field.key) == nil {
+                return false
+            }
+        }
+
+        return !method.credentialFields.isEmpty || method.isDesktopIntegration
     }
 
     // MARK: - Environment Variables for MCP Servers
@@ -176,6 +204,7 @@ class SettingsManager: ObservableObject {
 
 extension Defaults.Keys {
     static let enabledPlatforms = Key<[String]>("enabledPlatforms", default: [])
+    static let connectionMethods = Key<[String: String]>("connectionMethods", default: [:])
     static let launchAtLogin = Key<Bool>("launchAtLogin", default: false)
     static let morningNotifications = Key<Bool>("morningNotifications", default: true)
     static let morningTime = Key<Date>("morningTime", default: Calendar.current.date(from: DateComponents(hour: 7, minute: 0)) ?? Date())

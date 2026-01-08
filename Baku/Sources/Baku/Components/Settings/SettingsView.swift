@@ -2,37 +2,44 @@ import SwiftUI
 import Defaults
 import LaunchAtLogin
 
-/// Settings view for Baku preferences
+// MARK: - Design Tokens
+
+private enum Design {
+    static let cornerRadius: CGFloat = 8
+    static let spacing: CGFloat = 12
+    static let padding: CGFloat = 16
+}
+
+// MARK: - Settings View
+
 struct SettingsView: View {
     @StateObject private var settings = SettingsManager.shared
-    @State private var selectedPlatform: Platform?
+    @State private var configuringPlatform: Platform?
 
     var body: some View {
         TabView {
-            generalSettings
-                .tabItem {
-                    Label("General", systemImage: "gearshape")
-                }
+            GeneralSettingsTab()
+                .tabItem { Label("General", systemImage: "gearshape") }
 
-            platformSettings
-                .tabItem {
-                    Label("Platforms", systemImage: "app.connected.to.app.below.fill")
-                }
+            PlatformsSettingsTab(configuringPlatform: $configuringPlatform)
+                .tabItem { Label("Platforms", systemImage: "app.connected.to.app.below.fill") }
 
-            aiSettings
-                .tabItem {
-                    Label("AI", systemImage: "sparkles")
-                }
+            AISettingsTab()
+                .tabItem { Label("AI", systemImage: "sparkles") }
         }
-        .frame(width: 500, height: 400)
-        .sheet(item: $selectedPlatform) { platform in
-            CredentialSheet(platform: platform, settings: settings)
+        .frame(width: 520, height: 420)
+        .sheet(item: $configuringPlatform) { platform in
+            PlatformConfigSheet(platform: platform) {
+                configuringPlatform = nil
+            }
         }
     }
+}
 
-    // MARK: - General Settings
+// MARK: - General Settings Tab
 
-    private var generalSettings: some View {
+private struct GeneralSettingsTab: View {
+    var body: some View {
         Form {
             Section {
                 LaunchAtLogin.Toggle("Launch at login")
@@ -62,109 +69,177 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
+        .padding(Design.padding)
     }
+}
 
-    // MARK: - Platform Settings
+// MARK: - Platforms Settings Tab
 
-    private var platformSettings: some View {
-        Form {
-            ForEach(Platform.allCases) { platform in
-                Section {
-                    HStack {
-                        Image(systemName: platform.iconName)
-                            .font(.title2)
-                            .foregroundColor(platform.accentColor)
-                            .frame(width: 30)
+private struct PlatformsSettingsTab: View {
+    @StateObject private var settings = SettingsManager.shared
+    @Binding var configuringPlatform: Platform?
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(platform.displayName)
-                                .font(.headline)
-                            Text(platformStatusText(platform))
-                                .font(.caption)
-                                .foregroundColor(platformStatusColor(platform))
-                        }
-
-                        Spacer()
-
-                        if settings.isPlatformConfigured(platform) {
-                            Button("Edit") {
-                                logger.info("Edit tapped for platform: \(platform.displayName)")
-                                selectedPlatform = platform
-                            }
-                            .buttonStyle(.bordered)
-
-                            Toggle("", isOn: Binding(
-                                get: { settings.isPlatformEnabled(platform) },
-                                set: { settings.setPlatformEnabled(platform, enabled: $0) }
-                            ))
-                            .labelsHidden()
-                        } else {
-                            Button("Configure") {
-                                logger.info("Configure tapped for platform: \(platform.displayName)")
-                                selectedPlatform = platform
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                    }
-                    .padding(.vertical, 4)
+    var body: some View {
+        ScrollView {
+            VStack(spacing: Design.spacing) {
+                ForEach(Platform.allCases) { platform in
+                    PlatformRow(
+                        platform: platform,
+                        onConfigure: { configuringPlatform = platform }
+                    )
                 }
             }
+            .padding(Design.padding)
         }
-        .formStyle(.grouped)
-        .padding()
+    }
+}
+
+// MARK: - Platform Row
+
+private struct PlatformRow: View {
+    let platform: Platform
+    let onConfigure: () -> Void
+
+    @StateObject private var settings = SettingsManager.shared
+
+    private var connectionMethod: ConnectionMethod {
+        settings.getConnectionMethod(for: platform)
     }
 
-    private func platformStatusText(_ platform: Platform) -> String {
-        if settings.isPlatformConfigured(platform) {
+    private var isConfigured: Bool {
+        settings.isPlatformConfigured(platform)
+    }
+
+    var body: some View {
+        HStack(spacing: Design.spacing) {
+            // Platform icon
+            Image(systemName: platform.iconName)
+                .font(.title2)
+                .foregroundColor(platform.accentColor)
+                .frame(width: 32, height: 32)
+
+            // Platform info
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(platform.displayName)
+                        .font(.headline)
+
+                    if isConfigured {
+                        Text("•")
+                            .foregroundColor(.secondary)
+                        Text(connectionMethod.displayName)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundColor(statusColor)
+            }
+
+            Spacer()
+
+            // Actions
+            if isConfigured {
+                Toggle("", isOn: Binding(
+                    get: { settings.isPlatformEnabled(platform) },
+                    set: { settings.setPlatformEnabled(platform, enabled: $0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+
+                Button("Edit") {
+                    onConfigure()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            } else {
+                Button("Set Up") {
+                    onConfigure()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+        .padding(Design.spacing)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(Design.cornerRadius)
+    }
+
+    private var statusText: String {
+        if isConfigured {
             return settings.isPlatformEnabled(platform) ? "Connected" : "Disabled"
         }
         return "Not configured"
     }
 
-    private func platformStatusColor(_ platform: Platform) -> Color {
-        if settings.isPlatformConfigured(platform) {
+    private var statusColor: Color {
+        if isConfigured {
             return settings.isPlatformEnabled(platform) ? .green : .secondary
         }
         return .secondary
     }
+}
 
-    // MARK: - AI Settings
+// MARK: - AI Settings Tab
 
-    private var aiSettings: some View {
+private struct AISettingsTab: View {
+    @StateObject private var settings = SettingsManager.shared
+    @State private var isEditingAPIKey = false
+    @State private var apiKeyInput = ""
+
+    private var hasAPIKey: Bool {
+        settings.getCredential(platform: .gmail, key: "claude_api_key") != nil
+    }
+
+    var body: some View {
         Form {
             Section("Claude API") {
                 HStack {
-                    Text("API Key")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("API Key")
+                        if hasAPIKey {
+                            Text("Configured")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+                    }
+
                     Spacer()
-                    if settings.getCredential(platform: .gmail, key: "claude_api_key") != nil {
-                        Text("Configured")
-                            .foregroundColor(.green)
-                        Button("Edit") {
-                            // Show API key input
+
+                    if isEditingAPIKey {
+                        SecureField("sk-ant-...", text: $apiKeyInput)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 180)
+
+                        Button("Save") {
+                            if !apiKeyInput.isEmpty {
+                                settings.setCredential(platform: .gmail, key: "claude_api_key", value: apiKeyInput)
+                            }
+                            apiKeyInput = ""
+                            isEditingAPIKey = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+
+                        Button("Cancel") {
+                            apiKeyInput = ""
+                            isEditingAPIKey = false
+                        }
+                        .controlSize(.small)
+                    } else {
+                        Button(hasAPIKey ? "Change" : "Add Key") {
+                            isEditingAPIKey = true
                         }
                         .buttonStyle(.bordered)
-                    } else {
-                        SecureInputField(
-                            placeholder: "sk-ant-...",
-                            onSave: { key in
-                                settings.setCredential(platform: .gmail, key: "claude_api_key", value: key)
-                            }
-                        )
+                        .controlSize(.small)
                     }
                 }
 
                 Text("Get your API key from console.anthropic.com")
                     .font(.caption)
                     .foregroundColor(.secondary)
-
-                HStack(spacing: 4) {
-                    Image(systemName: "lock.shield.fill")
-                        .font(.caption2)
-                    Text("Stored locally in your Mac's Keychain")
-                        .font(.caption2)
-                }
-                .foregroundColor(.secondary)
             }
 
             Section("Response Style") {
@@ -186,130 +261,209 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
             }
+
+            Section {
+                HStack(spacing: 4) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.caption)
+                    Text("API key stored locally in your Mac's Keychain")
+                        .font(.caption)
+                }
+                .foregroundColor(.secondary)
+            }
         }
         .formStyle(.grouped)
-        .padding()
+        .padding(Design.padding)
     }
 }
 
-// MARK: - Credential Sheet
+// MARK: - Platform Config Sheet
 
-struct CredentialSheet: View {
+struct PlatformConfigSheet: View {
     let platform: Platform
-    @ObservedObject var settings: SettingsManager
-    @Environment(\.dismiss) private var dismiss
+    let onDismiss: () -> Void
 
+    @StateObject private var settings = SettingsManager.shared
+    @State private var selectedMethod: ConnectionMethod
     @State private var credentials: [String: String] = [:]
+    @State private var showingRemoveAlert = false
+
+    init(platform: Platform, onDismiss: @escaping () -> Void) {
+        self.platform = platform
+        self.onDismiss = onDismiss
+        _selectedMethod = State(initialValue: SettingsManager.shared.getConnectionMethod(for: platform))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             // Header
-            HStack {
-                Image(systemName: platform.iconName)
-                    .font(.title)
-                    .foregroundColor(platform.accentColor)
-                Text("\(platform.displayName) Configuration")
-                    .font(.headline)
-                Spacer()
-            }
-            .padding()
-            .background(Color(NSColor.windowBackgroundColor))
+            header
 
             Divider()
 
-            // Form
-            Form {
-                ForEach(credentialFields, id: \.key) { field in
-                    if field.isSecret {
-                        SecureField(field.label, text: binding(for: field.key))
+            // Content
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    connectionMethodPicker
+
+                    if selectedMethod.requiresCredentials {
+                        credentialsForm
                     } else {
-                        TextField(field.label, text: binding(for: field.key))
+                        desktopIntegrationInfo
                     }
                 }
-
-                if let helpText = platform.setupHelpText {
-                    Text(helpText)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                if let url = platform.setupURL {
-                    Link("Get credentials", destination: url)
-                        .font(.caption)
-                }
-
-                HStack(spacing: 4) {
-                    Image(systemName: "lock.shield.fill")
-                        .font(.caption2)
-                    Text("Credentials are stored locally in your Mac's Keychain")
-                        .font(.caption2)
-                }
-                .foregroundColor(.secondary)
+                .padding(20)
             }
-            .formStyle(.grouped)
-            .padding()
 
             Divider()
 
-            // Actions
-            HStack {
-                Button("Remove") {
-                    settings.clearAllCredentials(for: platform)
-                    settings.setPlatformEnabled(platform, enabled: false)
-                    dismiss()
-                }
-                .foregroundColor(.red)
-
-                Spacer()
-
-                Button("Cancel") {
-                    dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
-
-                Button("Save") {
-                    saveCredentials()
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
-            }
-            .padding()
+            // Footer
+            footer
         }
-        .frame(width: 400, height: 350)
-        .onAppear {
-            logger.info("CredentialSheet appeared for platform: \(platform.displayName)")
+        .frame(width: 440, height: 400)
+        .onAppear(perform: loadCredentials)
+        .onChange(of: selectedMethod) { _ in
             loadCredentials()
         }
-    }
-
-    private var credentialFields: [CredentialField] {
-        switch platform {
-        case .gmail:
-            return [
-                CredentialField(key: "client_id", label: "Client ID", isSecret: false),
-                CredentialField(key: "client_secret", label: "Client Secret", isSecret: true)
-            ]
-        case .slack:
-            return [
-                CredentialField(key: "bot_token", label: "Bot Token (xoxb-...)", isSecret: true),
-                CredentialField(key: "app_token", label: "App Token (xapp-...)", isSecret: true)
-            ]
-        case .discord:
-            return [
-                CredentialField(key: "token", label: "Bot Token", isSecret: true)
-            ]
-        case .twitter:
-            return [
-                CredentialField(key: "api_key", label: "API Key", isSecret: false),
-                CredentialField(key: "api_secret", label: "API Secret", isSecret: true)
-            ]
-        case .grok:
-            return [
-                CredentialField(key: "api_key", label: "API Key", isSecret: true)
-            ]
+        .alert("Remove Connection?", isPresented: $showingRemoveAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Remove", role: .destructive) {
+                removeConnection()
+            }
+        } message: {
+            Text("This will remove all saved credentials for \(platform.displayName).")
         }
     }
+
+    private var header: some View {
+        HStack {
+            Image(systemName: platform.iconName)
+                .font(.title2)
+                .foregroundColor(platform.accentColor)
+
+            Text(platform.displayName)
+                .font(.headline)
+
+            Spacer()
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+    }
+
+    private var connectionMethodPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Connection Method")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            VStack(spacing: 8) {
+                ForEach(platform.connectionMethods) { method in
+                    ConnectionMethodOption(
+                        method: method,
+                        isSelected: selectedMethod == method,
+                        onSelect: { selectedMethod = method }
+                    )
+                }
+            }
+        }
+    }
+
+    private var credentialsForm: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Credentials")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            ForEach(selectedMethod.credentialFields) { field in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(field.label)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    if field.isSecret {
+                        SecureField(field.placeholder, text: binding(for: field.key))
+                            .textFieldStyle(.roundedBorder)
+                    } else {
+                        TextField(field.placeholder, text: binding(for: field.key))
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+            }
+
+            if let instructions = selectedMethod.setupInstructions {
+                Text(instructions)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            if let url = selectedMethod.setupURL {
+                Link(destination: url) {
+                    HStack(spacing: 4) {
+                        Text("Get credentials")
+                        Image(systemName: "arrow.up.right")
+                    }
+                    .font(.caption)
+                }
+            }
+        }
+    }
+
+    private var desktopIntegrationInfo: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title)
+                    .foregroundColor(.green)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("No setup required")
+                        .font(.headline)
+
+                    if let instructions = selectedMethod.setupInstructions {
+                        Text(instructions)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding()
+            .background(Color.green.opacity(0.1))
+            .cornerRadius(Design.cornerRadius)
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            if settings.isPlatformConfigured(platform) {
+                Button("Remove") {
+                    showingRemoveAlert = true
+                }
+                .foregroundColor(.red)
+            }
+
+            Spacer()
+
+            Button("Cancel") {
+                onDismiss()
+            }
+            .keyboardShortcut(.cancelAction)
+
+            Button("Save") {
+                save()
+            }
+            .keyboardShortcut(.defaultAction)
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(16)
+    }
+
+    // MARK: - Helpers
 
     private func binding(for key: String) -> Binding<String> {
         Binding(
@@ -319,90 +473,94 @@ struct CredentialSheet: View {
     }
 
     private func loadCredentials() {
-        for field in credentialFields {
+        credentials = [:]
+        for field in selectedMethod.credentialFields {
             if let value = settings.getCredential(platform: platform, key: field.key) {
                 credentials[field.key] = value
             }
         }
     }
 
-    private func saveCredentials() {
+    private func save() {
+        // Save connection method
+        settings.setConnectionMethod(selectedMethod, for: platform)
+
+        // Save credentials
         for (key, value) in credentials where !value.isEmpty {
             settings.setCredential(platform: platform, key: key, value: value)
         }
+
+        // Enable platform
         settings.setPlatformEnabled(platform, enabled: true)
+
+        onDismiss()
+    }
+
+    private func removeConnection() {
+        settings.clearAllCredentials(for: platform)
+        settings.setPlatformEnabled(platform, enabled: false)
+        onDismiss()
     }
 }
 
-struct CredentialField {
-    let key: String
-    let label: String
-    let isSecret: Bool
-}
+// MARK: - Connection Method Option
 
-// MARK: - Secure Input Field
-
-struct SecureInputField: View {
-    let placeholder: String
-    let onSave: (String) -> Void
-
-    @State private var value = ""
-    @State private var isEditing = false
+private struct ConnectionMethodOption: View {
+    let method: ConnectionMethod
+    let isSelected: Bool
+    let onSelect: () -> Void
 
     var body: some View {
-        HStack {
-            if isEditing {
-                SecureField(placeholder, text: $value)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 200)
+        Button(action: onSelect) {
+            HStack(spacing: 12) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(isSelected ? .accentColor : .secondary)
 
-                Button("Save") {
-                    onSave(value)
-                    isEditing = false
-                    value = ""
+                Image(systemName: method.iconName)
+                    .frame(width: 20)
+                    .foregroundColor(.secondary)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(method.displayName)
+                        .font(.body)
+                        .foregroundColor(.primary)
+
+                    Text(method.subtitle)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                .buttonStyle(.borderedProminent)
-            } else {
-                Button("Add Key") {
-                    isEditing = true
-                }
-                .buttonStyle(.bordered)
+
+                Spacer()
+
+                Text(method.complexity.rawValue)
+                    .font(.caption2)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(method.complexity.color.opacity(0.2))
+                    .foregroundColor(method.complexity.color)
+                    .cornerRadius(4)
             }
+            .padding(10)
+            .background(isSelected ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(Design.cornerRadius)
+            .overlay(
+                RoundedRectangle(cornerRadius: Design.cornerRadius)
+                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1)
+            )
         }
+        .buttonStyle(.plain)
     }
 }
 
-// MARK: - Platform Extensions
+// MARK: - Platform Extensions (moved from old file)
 
 extension Platform {
     var setupHelpText: String? {
-        switch self {
-        case .gmail:
-            return "Create OAuth credentials in Google Cloud Console"
-        case .slack:
-            return "Create a Slack app and add Bot Token Scopes"
-        case .discord:
-            return "Create a Discord application and bot"
-        case .twitter:
-            return "Apply for Twitter API access (may require approval)"
-        case .grok:
-            return "Get your xAI API key from the console"
-        }
+        defaultConnectionMethod.setupInstructions
     }
 
     var setupURL: URL? {
-        switch self {
-        case .gmail:
-            return URL(string: "https://console.cloud.google.com/apis/credentials")
-        case .slack:
-            return URL(string: "https://api.slack.com/apps")
-        case .discord:
-            return URL(string: "https://discord.com/developers/applications")
-        case .twitter:
-            return URL(string: "https://developer.twitter.com/en/portal/dashboard")
-        case .grok:
-            return URL(string: "https://console.x.ai")
-        }
+        defaultConnectionMethod.setupURL
     }
 }
 

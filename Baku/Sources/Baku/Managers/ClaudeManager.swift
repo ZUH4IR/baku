@@ -1,6 +1,6 @@
 import Foundation
 
-/// Manages communication with Claude API for draft generation
+/// Manages communication with Claude via the claude CLI
 @MainActor
 class ClaudeManager: ObservableObject {
     static let shared = ClaudeManager()
@@ -9,7 +9,17 @@ class ClaudeManager: ObservableObject {
     @Published var lastError: Error?
 
     private let settings = SettingsManager.shared
-    private let apiURL = URL(string: "https://api.anthropic.com/v1/messages")!
+
+    /// Path to claude CLI - checks common install locations
+    private var claudePath: String? {
+        let paths = [
+            "/usr/local/bin/claude",
+            "/opt/homebrew/bin/claude",
+            "\(NSHomeDirectory())/.claude/local/claude",
+            "\(NSHomeDirectory())/.local/bin/claude"
+        ]
+        return paths.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
 
     // MARK: - Draft Generation
 
@@ -147,15 +157,61 @@ class ClaudeManager: ObservableObject {
         }
     }
 
-    // MARK: - Claude API Communication
+    // MARK: - Claude CLI Communication
 
     private func callClaudeAPI(prompt: String) async throws -> String {
-        // Check for API key
-        guard let apiKey = settings.getCredential(platform: .gmail, key: "claude_api_key")
-                ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] else {
-            // Fall back to simulated response for development
-            return await simulatedResponse(for: prompt)
+        // Try to use claude CLI first (uses existing authentication)
+        if let path = claudePath {
+            return try await callClaudeCLI(path: path, prompt: prompt)
         }
+
+        // Fall back to direct API if CLI not found but API key is available
+        if let apiKey = settings.getCredential(platform: .gmail, key: "claude_api_key")
+                ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] {
+            return try await callClaudeDirectAPI(apiKey: apiKey, prompt: prompt)
+        }
+
+        // No claude CLI and no API key - return simulated response for development
+        return await simulatedResponse(for: prompt)
+    }
+
+    /// Call claude CLI with prompt - uses existing authentication
+    private func callClaudeCLI(path: String, prompt: String) async throws -> String {
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: path)
+                process.arguments = ["-p", prompt, "--output-format", "text"]
+
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
+                process.standardOutput = outputPipe
+                process.standardError = errorPipe
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+
+                    let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                    if process.terminationStatus == 0 && !output.isEmpty {
+                        continuation.resume(returning: output)
+                    } else {
+                        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                        let errorOutput = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                        continuation.resume(throwing: ClaudeError.cliError(message: errorOutput))
+                    }
+                } catch {
+                    continuation.resume(throwing: ClaudeError.cliError(message: error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    /// Direct API call as fallback
+    private func callClaudeDirectAPI(apiKey: String, prompt: String) async throws -> String {
+        let apiURL = URL(string: "https://api.anthropic.com/v1/messages")!
 
         var request = URLRequest(url: apiURL)
         request.httpMethod = "POST"
@@ -261,17 +317,23 @@ class ClaudeManager: ObservableObject {
 
 enum ClaudeError: Error, LocalizedError {
     case noAPIKey
+    case noCLI
     case invalidResponse
     case apiError(statusCode: Int, message: String)
+    case cliError(message: String)
 
     var errorDescription: String? {
         switch self {
         case .noAPIKey:
-            return "No Claude API key configured. Add it in Settings."
+            return "No Claude API key configured. Install Claude Code or add API key in Settings."
+        case .noCLI:
+            return "Claude CLI not found. Install Claude Code: npm install -g @anthropic-ai/claude-code"
         case .invalidResponse:
-            return "Invalid response from Claude API"
+            return "Invalid response from Claude"
         case .apiError(let code, let message):
             return "API error (\(code)): \(message)"
+        case .cliError(let message):
+            return "Claude CLI error: \(message)"
         }
     }
 }
