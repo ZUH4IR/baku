@@ -22,12 +22,17 @@ class InboxManager: ObservableObject {
     // MARK: - Initialization
 
     func initialize() async {
+        inboxLogger.info("InboxManager initializing...")
+        inboxLogger.info("Enabled platforms: \(self.settings.enabledPlatforms.map(\.rawValue))")
         await connectToEnabledPlatforms()
+        inboxLogger.info("Connected platforms after init: \(self.connectedPlatforms.map(\.rawValue))")
     }
 
     private func connectToEnabledPlatforms() async {
         for platform in Platform.allCases {
-            if settings.isPlatformEnabled(platform) {
+            let isEnabled = settings.isPlatformEnabled(platform)
+            if isEnabled {
+                inboxLogger.info("Platform \(platform.displayName) is enabled, connecting...")
                 await connectPlatform(platform)
             }
         }
@@ -37,12 +42,15 @@ class InboxManager: ObservableObject {
 
     func connectPlatform(_ platform: Platform) async {
         let method = settings.getConnectionMethod(for: platform)
+        inboxLogger.info("connectPlatform(\(platform.displayName)) - method: \(method.displayName)")
 
         // Discord user token - check if token is configured
         if method == .discordUserToken {
-            if settings.getCredential(platform: .discord, key: "user_token") != nil {
+            let hasToken = settings.getCredential(platform: .discord, key: "user_token") != nil
+            inboxLogger.info("Discord user token check: hasToken=\(hasToken)")
+            if hasToken {
                 connectedPlatforms.insert(platform)
-                inboxLogger.info("Using Discord user token for \(platform.displayName)")
+                inboxLogger.info("✓ Discord added to connectedPlatforms")
             } else {
                 inboxLogger.warning("Discord user token not configured")
             }
@@ -66,7 +74,9 @@ class InboxManager: ObservableObject {
         // Free public API platforms - connect via MCP but no credentials needed
         if !method.requiresCredentials && platform.isInfoPulse {
             // Try to start MCP server for info pulse
+            inboxLogger.info("Looking for MCP server for \(platform.displayName)...")
             if let serverPath = mcpServerPath(for: platform) {
+                inboxLogger.info("Found server at \(serverPath), starting client...")
                 let client = MCPClient(
                     serverPath: serverPath,
                     environment: [:] // No credentials needed
@@ -76,6 +86,8 @@ class InboxManager: ObservableObject {
                     mcpClients[platform] = client
                     connectedPlatforms.insert(platform)
                     inboxLogger.info("Connected to \(platform.displayName) via MCP (free API)")
+                } catch let error as MCPError {
+                    inboxLogger.error("Failed to connect \(platform.displayName): \(error.errorDescription ?? error.localizedDescription)")
                 } catch {
                     inboxLogger.error("Failed to connect \(platform.displayName): \(error.localizedDescription)")
                 }
@@ -436,11 +448,357 @@ class InboxManager: ObservableObject {
             info += "  • \(platform.displayName)\n"
         }
 
+        info += "\nMCP CLIENTS:\n"
+        for (platform, _) in mcpClients {
+            info += "  • \(platform.displayName): connected\n"
+        }
+        if mcpClients.isEmpty {
+            info += "  (none)\n"
+        }
+
         info += "\n"
         // Use detailed diagnostics to show file contents
         info += await desktopManager.getDetailedDiagnostics()
 
         return info
+    }
+
+    // MARK: - Self-Debugging with Claude
+
+    /// Use Claude CLI to diagnose why pulses aren't loading
+    func debugEmptyPulses() async -> Message {
+        inboxLogger.info("Starting self-debug for empty pulses")
+
+        // Gather diagnostic info
+        var diagnosticInfo = """
+        === Baku Self-Diagnostic Report ===
+
+        ENABLED INFO PULSES:
+        """
+
+        let infoPulses: [Platform] = [.grok, .markets, .news, .predictions]
+        for platform in infoPulses {
+            let enabled = settings.isPlatformEnabled(platform)
+            let connected = connectedPlatforms.contains(platform)
+            let method = settings.getConnectionMethod(for: platform)
+            let hasMCP = mcpClients[platform] != nil
+
+            diagnosticInfo += """
+
+            \(platform.displayName):
+              - Enabled: \(enabled)
+              - Connected: \(connected)
+              - Method: \(method.displayName)
+              - MCP Client: \(hasMCP ? "yes" : "no")
+            """
+
+            // Check MCP server path for non-Claude platforms
+            if platform != .grok {
+                if let path = mcpServerPath(for: platform) {
+                    diagnosticInfo += "\n  - Server: \(path)"
+                } else {
+                    diagnosticInfo += "\n  - Server: NOT FOUND"
+                }
+            }
+        }
+
+        // Check node availability
+        let nodeCheck = checkNodeAvailability()
+        diagnosticInfo += """
+
+        NODE.JS:
+          \(nodeCheck)
+
+        LAST ERROR: \(lastErrorMessage ?? "none")
+        """
+
+        // Try to use Claude to analyze
+        let prompt = """
+        Analyze this diagnostic report from a macOS app that shows info pulses (Markets, News, Predictions, Tech Pulse).
+
+        The user sees "No pulse data" in the Pulse tab. Based on this diagnostic info, explain:
+        1. What's likely wrong
+        2. How to fix it
+
+        Be concise and actionable. If MCP servers aren't connecting, explain that the app needs node.js.
+        If everything looks connected but no data shows, suggest refreshing.
+
+        \(diagnosticInfo)
+        """
+
+        do {
+            let analysis = try await ClaudeManager.shared.callClaudeForPulse(prompt: prompt)
+            return Message(
+                id: "debug:\(UUID().uuidString)",
+                platform: .grok,
+                platformMessageId: "debug",
+                senderName: "Baku Diagnostics",
+                senderHandle: nil,
+                senderAvatarURL: nil,
+                subject: "Why Pulses Are Empty",
+                content: analysis,
+                timestamp: Date(),
+                channelName: nil,
+                threadId: nil,
+                priority: .medium,
+                needsResponse: false,
+                isRead: false,
+                draft: nil
+            )
+        } catch {
+            // Claude not available - return manual diagnostic
+            inboxLogger.warning("Claude not available for self-debug: \(error.localizedDescription)")
+            return Message(
+                id: "debug:\(UUID().uuidString)",
+                platform: .grok,
+                platformMessageId: "debug",
+                senderName: "Baku Diagnostics",
+                senderHandle: nil,
+                senderAvatarURL: nil,
+                subject: "Pulse Connection Status",
+                content: generateManualDiagnostic(diagnosticInfo),
+                timestamp: Date(),
+                channelName: nil,
+                threadId: nil,
+                priority: .medium,
+                needsResponse: false,
+                isRead: false,
+                draft: nil
+            )
+        }
+    }
+
+    private func checkNodeAvailability() -> String {
+        let paths = [
+            "\(NSHomeDirectory())/.nvm/versions/node",
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node"
+        ]
+
+        for path in paths {
+            if path.contains("nvm") {
+                if let versions = try? FileManager.default.contentsOfDirectory(atPath: path) {
+                    return "Found via nvm: \(versions.sorted().last ?? "unknown version")"
+                }
+            } else if FileManager.default.isExecutableFile(atPath: path) {
+                return "Found at \(path)"
+            }
+        }
+        return "NOT FOUND - install with: brew install node"
+    }
+
+    private func generateManualDiagnostic(_ info: String) -> String {
+        var issues: [String] = []
+        var fixes: [String] = []
+
+        // Check for common issues
+        if info.contains("MCP Client: no") && !info.contains("MCP Client: yes") {
+            issues.append("MCP servers not connected")
+            fixes.append("Ensure Node.js is installed (brew install node)")
+        }
+
+        if info.contains("Server: NOT FOUND") {
+            issues.append("MCP server files missing")
+            fixes.append("Run setup.sh to install MCP servers")
+        }
+
+        if info.contains("NODE.JS:\n  NOT FOUND") {
+            issues.append("Node.js not installed")
+            fixes.append("Install Node.js: brew install node")
+        }
+
+        if info.contains("Connected: false") {
+            issues.append("Some platforms failed to connect")
+            fixes.append("Check Console.app for detailed error logs (filter: com.baku.app)")
+        }
+
+        if issues.isEmpty {
+            return """
+            Everything appears configured correctly.
+
+            Try:
+            1. Click the Refresh button
+            2. Quit and relaunch Baku
+            3. Check Console.app for errors (subsystem: com.baku.app)
+
+            Raw diagnostics:
+            \(info)
+            """
+        }
+
+        return """
+        Issues Found:
+        \(issues.map { "• \($0)" }.joined(separator: "\n"))
+
+        How to Fix:
+        \(fixes.map { "• \($0)" }.joined(separator: "\n"))
+
+        After fixing, restart Baku and click Refresh.
+        """
+    }
+
+    // MARK: - Auto-Fix
+
+    /// Automatically fix common pulse issues (build MCP servers, etc.)
+    func autoFixPulses(progress: @escaping (String) -> Void) async -> String {
+        inboxLogger.info("Starting auto-fix for pulses")
+
+        // Find the project root (where mcp-servers directory is)
+        guard let projectPath = findProjectRoot() else {
+            return "Could not find project directory"
+        }
+
+        let mcpServersPath = "\(projectPath)/mcp-servers"
+        let servers = ["markets-mcp", "news-mcp", "predictions-mcp"]
+
+        var results: [String] = []
+
+        for server in servers {
+            let serverPath = "\(mcpServersPath)/\(server)"
+            let distPath = "\(serverPath)/dist/index.js"
+
+            // Check if server directory exists
+            guard FileManager.default.fileExists(atPath: serverPath) else {
+                results.append("\(server): not found")
+                continue
+            }
+
+            // Check if already built
+            if FileManager.default.fileExists(atPath: distPath) {
+                results.append("\(server): already built")
+                continue
+            }
+
+            progress("Building \(server)...")
+
+            // Run npm install && npm run build
+            let buildResult = await runShellCommand(
+                "cd '\(serverPath)' && npm install --silent 2>/dev/null && npm run build 2>&1"
+            )
+
+            if buildResult.success {
+                results.append("\(server): built successfully")
+            } else {
+                results.append("\(server): build failed - \(buildResult.output.prefix(100))")
+            }
+        }
+
+        // Reconnect platforms
+        progress("Reconnecting platforms...")
+        await reconnectInfoPulses()
+
+        let summary = results.joined(separator: "\n")
+        inboxLogger.info("Auto-fix complete: \(summary)")
+
+        return "Fix complete:\n\(summary)"
+    }
+
+    private func findProjectRoot() -> String? {
+        // Try to find the project root by looking for mcp-servers directory
+        // Start from the app bundle and work up
+        let bundlePath = Bundle.main.bundlePath
+
+        // During development, the app is in DerivedData, so check common locations
+        let possibleRoots = [
+            // Check if there's a BAKU_PROJECT_ROOT environment variable
+            ProcessInfo.processInfo.environment["BAKU_PROJECT_ROOT"],
+            // Common development paths
+            "\(NSHomeDirectory())/conductor/workspaces/zuhair-helper/baku",
+            "\(NSHomeDirectory())/Developer/baku",
+            "\(NSHomeDirectory())/Projects/baku",
+            // Try to derive from bundle path (won't work for DerivedData builds)
+            URL(fileURLWithPath: bundlePath).deletingLastPathComponent().deletingLastPathComponent().path
+        ].compactMap { $0 }
+
+        for root in possibleRoots {
+            let mcpPath = "\(root)/mcp-servers"
+            if FileManager.default.fileExists(atPath: mcpPath) {
+                inboxLogger.info("Found project root: \(root)")
+                return root
+            }
+        }
+
+        inboxLogger.warning("Could not find project root")
+        return nil
+    }
+
+    private func runShellCommand(_ command: String) async -> (success: Bool, output: String) {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/bash")
+                process.arguments = ["-c", command]
+
+                // Set PATH to include nvm node
+                var env = ProcessInfo.processInfo.environment
+                let home = NSHomeDirectory()
+                let nvmPath = "\(home)/.nvm/versions/node"
+                if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmPath),
+                   let newest = versions.sorted().last {
+                    let nodeBin = "\(nvmPath)/\(newest)/bin"
+                    env["PATH"] = "\(nodeBin):\(env["PATH"] ?? "/usr/bin:/bin")"
+                }
+                process.environment = env
+
+                let outputPipe = Pipe()
+                process.standardOutput = outputPipe
+                process.standardError = outputPipe
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+
+                    let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: data, encoding: .utf8) ?? ""
+
+                    continuation.resume(returning: (process.terminationStatus == 0, output))
+                } catch {
+                    continuation.resume(returning: (false, error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    private func reconnectInfoPulses() async {
+        // Disconnect and reconnect info pulse platforms
+        let infoPulses: [Platform] = [.markets, .news, .predictions]
+
+        inboxLogger.info("Disconnecting \(infoPulses.count) info pulse platforms...")
+
+        for platform in infoPulses {
+            if let client = mcpClients[platform] {
+                inboxLogger.info("Stopping \(platform.displayName) client...")
+                await client.stop()
+                mcpClients.removeValue(forKey: platform)
+            }
+            connectedPlatforms.remove(platform)
+        }
+
+        inboxLogger.info("Reconnecting info pulse platforms in parallel...")
+
+        // Reconnect in parallel with timeout to avoid long hangs
+        let enabledPulses = infoPulses.filter { settings.isPlatformEnabled($0) }
+
+        await withTaskGroup(of: Void.self) { group in
+            for platform in enabledPulses {
+                group.addTask {
+                    // Individual timeout per platform (10 seconds)
+                    let connectTask = Task {
+                        await self.connectPlatform(platform)
+                    }
+
+                    let timeoutTask = Task {
+                        try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+                        connectTask.cancel()
+                    }
+
+                    await connectTask.value
+                    timeoutTask.cancel()
+                }
+            }
+        }
+
+        inboxLogger.info("Reconnect complete. Connected: \(self.connectedPlatforms.map(\.rawValue))")
     }
 }
 
