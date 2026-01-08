@@ -453,7 +453,7 @@ struct PlatformConfigSheet: View {
             // Footer
             footer
         }
-        .frame(width: 440, height: platform == .discord && selectedMethod == .discordUserToken ? 550 : 400)
+        .frame(width: 440, height: platform == .discord && selectedMethod == .discordUserToken ? 600 : 400)
         .onAppear {
             loadCredentials()
             // Load Discord guilds if token exists
@@ -463,6 +463,9 @@ struct PlatformConfigSheet: View {
                     discordUser = try? await discordManager.testToken(token)
                     try? await discordManager.fetchGuilds()
                 }
+            } else if platform == .discord && selectedMethod == .discordUserToken {
+                // Auto-show help for new users
+                showingTokenHelp = true
             }
         }
         .onChange(of: selectedMethod) { _ in
@@ -700,14 +703,32 @@ struct PlatformConfigSheet: View {
 
     // MARK: - Discord User Token Section
 
+    @State private var showingTokenHelp = false
+
     @ViewBuilder
     private var discordUserTokenSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             // Token input
             VStack(alignment: .leading, spacing: 8) {
-                Text("User Token")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                HStack {
+                    Text("User Token")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+
+                    Spacer()
+
+                    Button {
+                        showingTokenHelp.toggle()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "questionmark.circle")
+                            Text("How to get token")
+                        }
+                        .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.accentColor)
+                }
 
                 HStack {
                     SecureField("Paste your Discord token", text: binding(for: "user_token"))
@@ -743,9 +764,10 @@ struct PlatformConfigSheet: View {
                     }
                 }
 
-                Text("Get from browser DevTools: Network tab → filter 'api' → copy Authorization header")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                // Expandable help section
+                if showingTokenHelp {
+                    discordTokenHelpSection
+                }
             }
 
             Divider()
@@ -753,7 +775,7 @@ struct PlatformConfigSheet: View {
             // Server/Guild selection
             if discordUser != nil || !discordManager.guilds.isEmpty {
                 discordGuildSelector
-            } else if !credentials["user_token"]?.isEmpty ?? false == false {
+            } else if credentials["user_token"]?.isEmpty != false {
                 Text("Enter your token and click Test to load your servers")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -761,6 +783,41 @@ struct PlatformConfigSheet: View {
                     .padding()
             }
         }
+    }
+
+    @ViewBuilder
+    private var discordTokenHelpSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider()
+
+            Text("Get your Discord token in 4 steps:")
+                .font(.subheadline)
+                .fontWeight(.medium)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HelpStep(number: 1, text: "Open Discord in your browser", action: "Open Discord") {
+                    NSWorkspace.shared.open(URL(string: "https://discord.com/app")!)
+                }
+
+                HelpStep(number: 2, text: "Press ⌘⌥I to open DevTools, click Network tab")
+
+                HelpStep(number: 3, text: "Type 'api' in the filter box, then click any request")
+
+                HelpStep(number: 4, text: "In Headers, find 'Authorization' and copy the value")
+            }
+
+            HStack {
+                Image(systemName: "lightbulb.fill")
+                    .foregroundColor(.yellow)
+                Text("The token is a long string starting with letters/numbers")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.top, 4)
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .cornerRadius(8)
     }
 
     @ViewBuilder
@@ -964,6 +1021,47 @@ extension Platform {
 
     var setupURL: URL? {
         defaultConnectionMethod.setupURL
+    }
+}
+
+// MARK: - Help Step
+
+private struct HelpStep: View {
+    let number: Int
+    let text: String
+    var action: String?
+    var onAction: (() -> Void)?
+
+    init(number: Int, text: String, action: String? = nil, onAction: (() -> Void)? = nil) {
+        self.number = number
+        self.text = text
+        self.action = action
+        self.onAction = onAction
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(number)")
+                .font(.caption2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+                .frame(width: 18, height: 18)
+                .background(Circle().fill(Color.accentColor))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(text)
+                    .font(.caption)
+
+                if let action = action, let onAction = onAction {
+                    Button(action) {
+                        onAction()
+                    }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
     }
 }
 

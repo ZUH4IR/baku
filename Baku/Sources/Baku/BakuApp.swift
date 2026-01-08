@@ -149,7 +149,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
+        // Lower the notch window level so settings window can be interacted with
+        notchWindow?.level = .normal
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+
+        // Observe when settings window closes to restore floating level
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            if let window = notification.object as? NSWindow,
+               window.title.contains("Settings") || window.identifier?.rawValue.contains("settings") == true {
+                self?.notchWindow?.level = .floating
+            }
+        }
     }
 
     @objc private func quitApp() {

@@ -29,6 +29,17 @@ class SettingsManager: ObservableObject {
         let savedPlatforms = Defaults[.enabledPlatforms]
         enabledPlatforms = Set(savedPlatforms.compactMap { Platform(rawValue: $0) })
 
+        // Auto-enable free info pulse platforms (markets, news, predictions)
+        // These don't require any setup so should always be available
+        let freeInfoPulses: [Platform] = [.markets, .news, .predictions]
+        for platform in freeInfoPulses {
+            if !enabledPlatforms.contains(platform) {
+                enabledPlatforms.insert(platform)
+            }
+        }
+        // Save back if we added any
+        Defaults[.enabledPlatforms] = enabledPlatforms.map { $0.rawValue }
+
         // Load connection methods
         let savedMethods = Defaults[.connectionMethods]
         for (platformRaw, methodRaw) in savedMethods {
@@ -262,8 +273,14 @@ class SettingsManager: ObservableObject {
 // MARK: - Defaults Keys
 
 extension Defaults.Keys {
-    // Default platforms: Gmail (via Mail.app) and Slack (via desktop cache)
-    static let enabledPlatforms = Key<[String]>("enabledPlatforms", default: [Platform.gmail.rawValue, Platform.slack.rawValue])
+    // Default platforms: Gmail, Slack, and free info pulses (Markets, News, Predictions)
+    static let enabledPlatforms = Key<[String]>("enabledPlatforms", default: [
+        Platform.gmail.rawValue,
+        Platform.slack.rawValue,
+        Platform.markets.rawValue,
+        Platform.news.rawValue,
+        Platform.predictions.rawValue
+    ])
     static let connectionMethods = Key<[String: String]>("connectionMethods", default: [
         Platform.gmail.rawValue: ConnectionMethod.gmailMailApp.rawValue,
         Platform.slack.rawValue: ConnectionMethod.slackDesktop.rawValue

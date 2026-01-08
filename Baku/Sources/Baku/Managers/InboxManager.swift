@@ -56,7 +56,29 @@ class InboxManager: ObservableObject {
             return
         }
 
-        // MCP server connection
+        // Free public API platforms - connect via MCP but no credentials needed
+        if !method.requiresCredentials && platform.isInfoPulse {
+            // Try to start MCP server for info pulse
+            if let serverPath = mcpServerPath(for: platform) {
+                let client = MCPClient(
+                    serverPath: serverPath,
+                    environment: [:] // No credentials needed
+                )
+                do {
+                    try await client.start()
+                    mcpClients[platform] = client
+                    connectedPlatforms.insert(platform)
+                    inboxLogger.info("Connected to \(platform.displayName) via MCP (free API)")
+                } catch {
+                    inboxLogger.error("Failed to connect \(platform.displayName): \(error.localizedDescription)")
+                }
+            } else {
+                inboxLogger.warning("No MCP server found for \(platform.displayName)")
+            }
+            return
+        }
+
+        // MCP server connection (requires credentials)
         guard let serverPath = mcpServerPath(for: platform) else {
             inboxLogger.warning("No MCP server found for \(platform.displayName)")
             return
