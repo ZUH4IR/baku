@@ -10,6 +10,12 @@ struct ContentView: View {
     @State private var isFixing = false
     @State private var fixOutput: String = ""
 
+    // Chat state
+    @State private var chatInput: String = ""
+    @State private var chatResponse: String = ""
+    @State private var isChatting: Bool = false
+    @State private var showChatResponse: Bool = false
+
     enum MainTab: String, CaseIterable {
         case inbox = "Inbox"
         case pulse = "Pulse"
@@ -161,7 +167,101 @@ struct ContentView: View {
                     pulseList
                 }
             }
+
+            // Chat bar at bottom
+            chatBar
         }
+    }
+
+    // MARK: - Chat Bar
+
+    private var chatBar: some View {
+        VStack(spacing: 0) {
+            // Chat response area (expandable)
+            if showChatResponse && !chatResponse.isEmpty {
+                Divider()
+                    .background(Color.white.opacity(0.1))
+
+                ScrollView {
+                    Text(chatResponse)
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.85))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+                .frame(maxHeight: 120)
+                .background(Color.white.opacity(0.03))
+            }
+
+            Divider()
+                .background(Color.white.opacity(0.1))
+
+            // Input bar
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12))
+                    .foregroundColor(.purple.opacity(0.7))
+
+                TextField("Ask Claude anything...", text: $chatInput)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundColor(.white)
+                    .onSubmit {
+                        Task { await sendChatMessage() }
+                    }
+
+                if isChatting {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .tint(.white)
+                } else if !chatInput.isEmpty {
+                    Button {
+                        Task { await sendChatMessage() }
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(.purple)
+                    }
+                    .buttonStyle(.plain)
+                } else if showChatResponse {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showChatResponse = false
+                            chatResponse = ""
+                        }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.white.opacity(0.4))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.white.opacity(0.03))
+        }
+    }
+
+    private func sendChatMessage() async {
+        guard !chatInput.isEmpty else { return }
+
+        let message = chatInput
+        chatInput = ""
+        isChatting = true
+        showChatResponse = true
+
+        do {
+            let response = try await ClaudeManager.shared.chat(message: message)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                chatResponse = response
+            }
+        } catch {
+            chatResponse = "Error: \(error.localizedDescription)"
+        }
+
+        isChatting = false
     }
 
     private func emptyState(icon: String, title: String, subtitle: String) -> some View {
