@@ -27,7 +27,7 @@ PROJECT_DIR=$(pwd)
 echo -e "${GREEN}📦 Installing MCP server dependencies...${NC}"
 
 # Install MCP servers
-for server in gmail-mcp slack-mcp discord-mcp twitter-mcp grok-mcp; do
+for server in gmail-mcp slack-mcp discord-mcp twitter-mcp grok-mcp markets-mcp news-mcp predictions-mcp; do
     if [ -d "mcp-servers/$server" ]; then
         echo "  → Installing $server..."
         cd "mcp-servers/$server"
@@ -69,3 +69,8 @@ echo "  - Slack: Create app at https://api.slack.com/apps"
 echo "  - Discord: Create bot at https://discord.com/developers"
 echo "  - Twitter: Apply at https://developer.twitter.com"
 echo "  - Tech Pulse (Grok): Get API key at https://console.x.ai"
+echo ""
+echo "No credentials needed for:"
+echo "  - Markets (Yahoo Finance + CoinGecko)"
+echo "  - News (RSS feeds)"
+echo "  - Predictions (Polymarket)"

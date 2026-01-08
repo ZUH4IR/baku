@@ -165,8 +165,9 @@ struct PriorityBadge: View {
 
     private var backgroundColor: Color {
         switch priority {
-        case .high: return BakuDesign.Colors.error
-        case .medium: return BakuDesign.Colors.warning
+        case .critical: return BakuDesign.Colors.error
+        case .high: return BakuDesign.Colors.warning
+        case .medium: return BakuDesign.Colors.info
         case .low: return BakuDesign.Colors.textSecondary
         }
     }

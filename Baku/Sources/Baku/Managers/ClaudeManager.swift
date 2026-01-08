@@ -152,8 +152,16 @@ class ClaudeManager: ObservableObject {
             return "This is a Discord message. Can be casual and playful."
         case .twitter:
             return "This is a Twitter DM. Keep it brief (under 280 chars if possible)."
+        case .imessage:
+            return "This is an iMessage. Keep it casual and conversational."
         case .grok:
             return "This is a tech pulse summary. Focus on key insights and trends."
+        case .markets:
+            return "This is market data. Focus on key numbers and trends."
+        case .news:
+            return "This is a news summary. Be factual and concise."
+        case .predictions:
+            return "This is a prediction market update. Focus on probability changes."
         }
     }
 
