@@ -2,6 +2,10 @@ import SwiftUI
 import Defaults
 import AppKit
 import KeyboardShortcuts
+import os
+
+/// Global logger for Baku - view logs in Console.app with subsystem "com.baku.app"
+let logger = Logger(subsystem: "com.baku.app", category: "general")
 
 @main
 struct BakuApp: App {

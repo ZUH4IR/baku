@@ -22,10 +22,7 @@ let package = Package(
                 "KeyboardShortcuts",
                 .product(name: "LaunchAtLogin", package: "LaunchAtLogin-Modern"),
             ],
-            path: "Sources/Baku",
-            resources: [
-                .process("../Resources")
-            ]
+            path: "Sources/Baku"
         )
     ]
 )

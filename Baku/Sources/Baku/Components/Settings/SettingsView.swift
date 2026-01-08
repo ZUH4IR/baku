@@ -26,10 +26,8 @@ struct SettingsView: View {
                 }
         }
         .frame(width: 500, height: 400)
-        .sheet(isPresented: $showingCredentialSheet) {
-            if let platform = selectedPlatform {
-                CredentialSheet(platform: platform, settings: settings)
-            }
+        .sheet(item: $selectedPlatform) { platform in
+            CredentialSheet(platform: platform, settings: settings)
         }
     }
 
@@ -104,8 +102,11 @@ struct SettingsView: View {
                             .labelsHidden()
                         } else {
                             Button("Configure") {
+                                logger.info("Configure tapped for platform: \(platform.displayName)")
                                 selectedPlatform = platform
+                                logger.debug("selectedPlatform set to: \(String(describing: platform))")
                                 showingCredentialSheet = true
+                                logger.debug("showingCredentialSheet set to: true")
                             }
                             .buttonStyle(.borderedProminent)
                         }
@@ -265,6 +266,7 @@ struct CredentialSheet: View {
         }
         .frame(width: 400, height: 350)
         .onAppear {
+            logger.info("CredentialSheet appeared for platform: \(platform.displayName)")
             loadCredentials()
         }
     }
