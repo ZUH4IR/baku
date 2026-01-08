@@ -1,0 +1,10 @@
+{
+  "name": "auth-helper",
+  "version": "1.0.0",
+  "description": "Browser-based OAuth helper for Baku",
+  "type": "module",
+  "scripts": {
+    "google": "node src/google-auth.js"
+  },
+  "dependencies": {}
+}
