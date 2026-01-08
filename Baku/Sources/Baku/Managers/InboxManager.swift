@@ -106,26 +106,30 @@ class InboxManager: ObservableObject {
     }
 
     private func mcpServerPath(for platform: Platform) -> String? {
-        let bundle = Bundle.main.bundlePath
-        let basePath = URL(fileURLWithPath: bundle)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .path
+        // Try multiple paths - development vs production
+        let possibleBasePaths: [String] = [
+            // Development: hardcoded project path
+            "/Users/zuhair/conductor/workspaces/zuhair-helper/baku",
+            // Production: relative to app bundle
+            URL(fileURLWithPath: Bundle.main.bundlePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .path
+        ]
 
-        let serverPath = "\(basePath)/mcp-servers/\(platform.rawValue)-mcp/dist/index.js"
-
-        if FileManager.default.fileExists(atPath: serverPath) {
-            return serverPath
+        for basePath in possibleBasePaths {
+            // Only look for compiled JS - node can't run .ts directly
+            let distPath = "\(basePath)/mcp-servers/\(platform.rawValue)-mcp/dist/index.js"
+            if FileManager.default.fileExists(atPath: distPath) {
+                inboxLogger.info("Found MCP server at: \(distPath)")
+                return distPath
+            }
         }
 
-        let srcPath = "\(basePath)/mcp-servers/\(platform.rawValue)-mcp/src/index.ts"
-        if FileManager.default.fileExists(atPath: srcPath) {
-            return srcPath
-        }
-
+        inboxLogger.warning("MCP server not found for \(platform.rawValue)")
         return nil
     }
 
@@ -136,6 +140,14 @@ class InboxManager: ObservableObject {
         isLoading = true
         lastErrorMessage = nil
         defer { isLoading = false }
+
+        // Reconnect any newly-enabled platforms (e.g., user added Discord after app started)
+        for platform in settings.enabledPlatforms {
+            if !connectedPlatforms.contains(platform) {
+                inboxLogger.info("Connecting newly-enabled platform: \(platform.displayName)")
+                await connectPlatform(platform)
+            }
+        }
 
         var allMessages: [Message] = []
         var errors: [String] = []
