@@ -25,6 +25,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Single instance enforcement - quit if another instance is already running
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let myName = ProcessInfo.processInfo.processName
+        let runningBakus = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .filter { $0.processIdentifier != currentPID }
+
+        // Also check by process name for SPM executables without bundle ID
+        let allApps = NSWorkspace.shared.runningApplications
+        let otherBakusByName = allApps.filter {
+            $0.localizedName == myName && $0.processIdentifier != currentPID
+        }
+
+        if !runningBakus.isEmpty || !otherBakusByName.isEmpty {
+            logger.warning("Another instance of Baku is already running (found \(runningBakus.count) by bundle, \(otherBakusByName.count) by name), terminating this one (PID: \(currentPID))")
+            NSApp.terminate(nil)
+            return
+        }
+
         // Menu bar only app - no dock icon
         NSApp.setActivationPolicy(.accessory)
 

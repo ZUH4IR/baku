@@ -4,6 +4,12 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var viewModel: BakuViewModel
     @State private var showingSettings = false
+    @State private var selectedTab: MainTab = .inbox
+
+    enum MainTab: String, CaseIterable {
+        case inbox = "Inbox"
+        case pulse = "Pulse"
+    }
 
     // MARK: - Animation
 
@@ -103,6 +109,16 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Filtered Messages
+
+    private var inboxMessages: [Message] {
+        viewModel.messages.filter { !$0.platform.isInfoPulse }
+    }
+
+    private var pulseMessages: [Message] {
+        viewModel.messages.filter { $0.platform.isInfoPulse }
+    }
+
     // MARK: - Inbox View
 
     private var inboxView: some View {
@@ -115,24 +131,41 @@ struct ContentView: View {
             Divider()
                 .background(Color.white.opacity(0.1))
 
-            if viewModel.messages.isEmpty {
-                emptyState
-            } else {
-                messageList
+            switch selectedTab {
+            case .inbox:
+                if inboxMessages.isEmpty {
+                    emptyState(
+                        icon: "tray",
+                        title: "No messages",
+                        subtitle: "Configure platforms in Settings"
+                    )
+                } else {
+                    messageList(messages: inboxMessages)
+                }
+            case .pulse:
+                if pulseMessages.isEmpty {
+                    emptyState(
+                        icon: "waveform.path.ecg",
+                        title: "No pulse data",
+                        subtitle: "Enable Markets, News, or Predictions"
+                    )
+                } else {
+                    pulseList
+                }
             }
         }
     }
 
-    private var emptyState: some View {
+    private func emptyState(icon: String, title: String, subtitle: String) -> some View {
         VStack(spacing: 12) {
             Spacer()
-            Image(systemName: "tray")
+            Image(systemName: icon)
                 .font(.system(size: 40))
                 .foregroundColor(.white.opacity(0.3))
-            Text("No messages")
+            Text(title)
                 .font(.system(size: 14))
                 .foregroundColor(.white.opacity(0.5))
-            Text("Configure platforms in Settings")
+            Text(subtitle)
                 .font(.system(size: 12))
                 .foregroundColor(.white.opacity(0.3))
             Button("Open Settings") {
@@ -144,10 +177,10 @@ struct ContentView: View {
         }
     }
 
-    private var messageList: some View {
+    private func messageList(messages: [Message]) -> some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(viewModel.messages) { message in
+                ForEach(messages) { message in
                     MessageCard(
                         message: message,
                         onTap: {
@@ -160,12 +193,25 @@ struct ContentView: View {
                         }
                     )
 
-                    if message.id != viewModel.messages.last?.id {
+                    if message.id != messages.last?.id {
                         Divider()
                             .background(Color.white.opacity(0.06))
                     }
                 }
             }
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    private var pulseList: some View {
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                ForEach(pulseMessages) { message in
+                    PulseCard(message: message)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
         .scrollIndicators(.hidden)
     }
@@ -183,10 +229,21 @@ struct ContentView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack {
-            Text("Inbox")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundColor(.white)
+        HStack(spacing: 16) {
+            // Tab selector
+            HStack(spacing: 4) {
+                ForEach(MainTab.allCases, id: \.self) { tab in
+                    TabButton(
+                        title: tab.rawValue,
+                        count: tab == .inbox ? inboxMessages.count : pulseMessages.count,
+                        isSelected: selectedTab == tab
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            selectedTab = tab
+                        }
+                    }
+                }
+            }
 
             if let time = viewModel.lastFetchTime {
                 Text("Updated \(time.timeAgo)")
@@ -234,6 +291,82 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+}
+
+// MARK: - Tab Button
+
+private struct TabButton: View {
+    let title: String
+    let count: Int
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.system(size: 14, weight: isSelected ? .semibold : .medium))
+
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(isSelected ? Color.white.opacity(0.2) : Color.white.opacity(0.1))
+                        .cornerRadius(4)
+                }
+            }
+            .foregroundColor(isSelected ? .white : .white.opacity(0.5))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(isSelected ? Color.white.opacity(0.1) : Color.clear)
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Pulse Card
+
+private struct PulseCard: View {
+    let message: Message
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Header
+            HStack(spacing: 8) {
+                Image(systemName: message.platform.iconName)
+                    .font(.system(size: 14))
+                    .foregroundColor(message.platform.accentColor)
+
+                Text(message.platform.displayName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
+
+                Spacer()
+
+                Text(message.timestamp.timeAgo)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.4))
+            }
+
+            // Content
+            Text(message.content)
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.8))
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(message.platform.accentColor.opacity(0.2), lineWidth: 1)
+                )
+        )
     }
 }
 

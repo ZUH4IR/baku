@@ -173,14 +173,47 @@ private struct PlatformsSettingsTab: View {
     @StateObject private var settings = SettingsManager.shared
     @Binding var configuringPlatform: Platform?
 
+    private var messagingPlatforms: [Platform] {
+        Platform.allCases.filter { !$0.isInfoPulse }
+    }
+
+    private var pulsePlatforms: [Platform] {
+        Platform.allCases.filter { $0.isInfoPulse }
+    }
+
     var body: some View {
         ScrollView {
-            VStack(spacing: Design.spacing) {
-                ForEach(Platform.allCases) { platform in
-                    PlatformRow(
-                        platform: platform,
-                        onConfigure: { configuringPlatform = platform }
-                    )
+            VStack(spacing: Design.spacing + 8) {
+                // Messaging platforms
+                VStack(alignment: .leading, spacing: Design.spacing) {
+                    Text("Messaging")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 4)
+
+                    ForEach(messagingPlatforms) { platform in
+                        PlatformRow(
+                            platform: platform,
+                            onConfigure: { configuringPlatform = platform }
+                        )
+                    }
+                }
+
+                // Info pulse platforms
+                VStack(alignment: .leading, spacing: Design.spacing) {
+                    Text("Info Pulse")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 4)
+
+                    ForEach(pulsePlatforms) { platform in
+                        PlatformRow(
+                            platform: platform,
+                            onConfigure: { configuringPlatform = platform }
+                        )
+                    }
                 }
             }
             .padding(Design.padding)
@@ -378,9 +411,13 @@ struct PlatformConfigSheet: View {
     let onDismiss: () -> Void
 
     @StateObject private var settings = SettingsManager.shared
+    @StateObject private var discordManager = DiscordManager.shared
     @State private var selectedMethod: ConnectionMethod
     @State private var credentials: [String: String] = [:]
     @State private var showingRemoveAlert = false
+    @State private var discordUser: DiscordUser?
+    @State private var isTestingToken = false
+    @State private var tokenError: String?
 
     init(platform: Platform, onDismiss: @escaping () -> Void) {
         self.platform = platform
@@ -400,7 +437,9 @@ struct PlatformConfigSheet: View {
                 VStack(alignment: .leading, spacing: 20) {
                     connectionMethodPicker
 
-                    if selectedMethod.requiresCredentials {
+                    if selectedMethod == .discordUserToken {
+                        discordUserTokenSection
+                    } else if selectedMethod.requiresCredentials {
                         credentialsForm
                     } else {
                         desktopIntegrationInfo
@@ -414,8 +453,18 @@ struct PlatformConfigSheet: View {
             // Footer
             footer
         }
-        .frame(width: 440, height: 400)
-        .onAppear(perform: loadCredentials)
+        .frame(width: 440, height: platform == .discord && selectedMethod == .discordUserToken ? 550 : 400)
+        .onAppear {
+            loadCredentials()
+            // Load Discord guilds if token exists
+            if platform == .discord, let token = settings.getCredential(platform: .discord, key: "user_token") {
+                credentials["user_token"] = token
+                Task {
+                    discordUser = try? await discordManager.testToken(token)
+                    try? await discordManager.fetchGuilds()
+                }
+            }
+        }
         .onChange(of: selectedMethod) { _ in
             loadCredentials()
         }
@@ -649,6 +698,149 @@ struct PlatformConfigSheet: View {
         }
     }
 
+    // MARK: - Discord User Token Section
+
+    @ViewBuilder
+    private var discordUserTokenSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Token input
+            VStack(alignment: .leading, spacing: 8) {
+                Text("User Token")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+
+                HStack {
+                    SecureField("Paste your Discord token", text: binding(for: "user_token"))
+                        .textFieldStyle(.roundedBorder)
+
+                    Button {
+                        testDiscordToken()
+                    } label: {
+                        if isTestingToken {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                        } else {
+                            Text("Test")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(credentials["user_token"]?.isEmpty ?? true || isTestingToken)
+                }
+
+                if let error = tokenError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+
+                if let user = discordUser {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Logged in as \(user.globalName ?? user.username)")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+                }
+
+                Text("Get from browser DevTools: Network tab → filter 'api' → copy Authorization header")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Divider()
+
+            // Server/Guild selection
+            if discordUser != nil || !discordManager.guilds.isEmpty {
+                discordGuildSelector
+            } else if !credentials["user_token"]?.isEmpty ?? false == false {
+                Text("Enter your token and click Test to load your servers")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var discordGuildSelector: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Select Servers")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                if discordManager.isLoading {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                }
+
+                Button("Refresh") {
+                    Task {
+                        try? await discordManager.fetchGuilds()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if discordManager.guilds.isEmpty {
+                Text("Loading servers...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(discordManager.guilds) { guild in
+                        DiscordGuildRow(
+                            guild: guild,
+                            isSelected: settings.discordSelectedGuilds.contains(guild.id)
+                        ) {
+                            settings.toggleDiscordGuild(guild.id)
+                        }
+                    }
+                }
+
+                Text("\(settings.discordSelectedGuilds.count) server\(settings.discordSelectedGuilds.count == 1 ? "" : "s") selected")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Divider()
+
+            // DM toggle
+            Toggle("Include Direct Messages", isOn: Binding(
+                get: { settings.discordIncludeDMs },
+                set: { settings.setDiscordIncludeDMs($0) }
+            ))
+            .font(.subheadline)
+        }
+    }
+
+    private func testDiscordToken() {
+        guard let token = credentials["user_token"], !token.isEmpty else { return }
+
+        isTestingToken = true
+        tokenError = nil
+
+        Task {
+            do {
+                discordUser = try await discordManager.testToken(token)
+                // Save the token
+                settings.setCredential(platform: .discord, key: "user_token", value: token)
+                // Load guilds
+                try? await discordManager.fetchGuilds()
+                try? await discordManager.fetchDMChannels()
+            } catch {
+                tokenError = error.localizedDescription
+                discordUser = nil
+            }
+            isTestingToken = false
+        }
+    }
+
     private var footer: some View {
         HStack {
             if settings.isPlatformConfigured(platform) {
@@ -772,6 +964,63 @@ extension Platform {
 
     var setupURL: URL? {
         defaultConnectionMethod.setupURL
+    }
+}
+
+// MARK: - Discord Guild Row
+
+private struct DiscordGuildRow: View {
+    let guild: DiscordGuild
+    let isSelected: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 10) {
+                // Guild icon
+                if let iconURL = guild.iconURL {
+                    AsyncImage(url: iconURL) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        guildPlaceholder
+                    }
+                    .frame(width: 28, height: 28)
+                    .clipShape(Circle())
+                } else {
+                    guildPlaceholder
+                }
+
+                // Guild name
+                Text(guild.name)
+                    .font(.body)
+                    .lineLimit(1)
+
+                Spacer()
+
+                // Selection indicator
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(isSelected ? .accentColor : .secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(Design.cornerRadius)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var guildPlaceholder: some View {
+        ZStack {
+            Circle()
+                .fill(Color.gray.opacity(0.3))
+                .frame(width: 28, height: 28)
+            Text(String(guild.name.prefix(1)))
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+        }
     }
 }
 

@@ -14,6 +14,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
 
     // Discord
     case discordDesktop = "discord_desktop"
+    case discordUserToken = "discord_user_token"
     case discordBot = "discord_bot"
 
     // iMessage
@@ -37,7 +38,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
         switch self {
         case .gmailOAuth, .gmailMailApp, .gmailIMAP: return .gmail
         case .slackDesktop, .slackOAuth, .slackBot: return .slack
-        case .discordDesktop, .discordBot: return .discord
+        case .discordDesktop, .discordUserToken, .discordBot: return .discord
         case .imessageLocal: return .imessage
         case .twitterOAuth, .twitterAPI: return .twitter
         case .grokAPI: return .grok
@@ -58,6 +59,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
         case .slackBot: return "Slack Bot"
 
         case .discordDesktop: return "Discord Desktop"
+        case .discordUserToken: return "User Token"
         case .discordBot: return "Discord Bot"
 
         case .imessageLocal: return "Messages.app"
@@ -84,6 +86,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
         case .slackBot: return "Requires workspace admin"
 
         case .discordDesktop: return "Read from local cache - no setup"
+        case .discordUserToken: return "Your account - select servers & DMs"
         case .discordBot: return "Requires creating a bot"
 
         case .imessageLocal: return "Read full history - requires FDA"
@@ -101,7 +104,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
 
     var iconName: String {
         switch self {
-        case .gmailOAuth, .slackOAuth, .twitterOAuth:
+        case .gmailOAuth, .slackOAuth, .twitterOAuth, .discordUserToken:
             return "person.badge.key.fill"
         case .gmailMailApp, .slackDesktop, .discordDesktop, .imessageLocal:
             return "macwindow"
@@ -121,7 +124,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
         case .gmailMailApp, .slackDesktop, .discordDesktop, .imessageLocal,
              .marketsPublic, .newsPublic, .predictionsPublic:
             return .easy
-        case .gmailOAuth, .slackOAuth, .twitterOAuth:
+        case .gmailOAuth, .slackOAuth, .twitterOAuth, .discordUserToken:
             return .medium
         case .gmailIMAP, .slackBot, .discordBot, .twitterAPI, .grokAPI:
             return .advanced
@@ -178,6 +181,10 @@ enum ConnectionMethod: String, Codable, Identifiable {
 
         case .discordDesktop:
             return [] // No credentials needed
+        case .discordUserToken:
+            return [
+                CredentialFieldInfo(key: "user_token", label: "User Token", isSecret: true, placeholder: "Get from browser DevTools")
+            ]
         case .discordBot:
             return [
                 CredentialFieldInfo(key: "token", label: "Bot Token", isSecret: true, placeholder: "")
@@ -245,6 +252,8 @@ enum ConnectionMethod: String, Codable, Identifiable {
             return "Create a Slack app with bot token scopes. Requires workspace admin."
         case .discordDesktop:
             return "Reads from local cache - works automatically"
+        case .discordUserToken:
+            return "Get your token from browser DevTools (Network tab > filter 'api' > Authorization header)"
         case .discordBot:
             return "Create a Discord application and bot in the Developer Portal"
         case .imessageLocal:
@@ -300,7 +309,7 @@ extension Platform {
         case .slack:
             return [.slackDesktop, .slackOAuth, .slackBot]
         case .discord:
-            return [.discordDesktop, .discordBot]
+            return [.discordUserToken, .discordDesktop, .discordBot]
         case .imessage:
             return [.imessageLocal]
         case .twitter:

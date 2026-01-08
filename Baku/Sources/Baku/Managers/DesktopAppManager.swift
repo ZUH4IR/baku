@@ -3,7 +3,7 @@ import AppKit
 import SQLite3
 import os.log
 
-private let logger = Logger(subsystem: "com.baku.app", category: "DesktopAppManager")
+private let desktopLogger = Logger(subsystem: "com.baku.app", category: "DesktopAppManager")
 
 /// Manages integration with macOS desktop apps via AppleScript and local cache reading
 actor DesktopAppManager {
@@ -49,6 +49,9 @@ actor DesktopAppManager {
         for path in slackCachePaths {
             let exists = FileManager.default.fileExists(atPath: path.path)
             info += "  \(exists ? "✓" : "✗") \(path.path)\n"
+            if exists {
+                info += getDirectoryContents(at: path, indent: "    ")
+            }
         }
 
         // Discord
@@ -57,6 +60,9 @@ actor DesktopAppManager {
         for path in discordCachePaths {
             let exists = FileManager.default.fileExists(atPath: path.path)
             info += "  \(exists ? "✓" : "✗") \(path.path)\n"
+            if exists {
+                info += getDirectoryContents(at: path, indent: "    ")
+            }
         }
 
         // Discord cache variants
@@ -75,11 +81,128 @@ actor DesktopAppManager {
         return info
     }
 
+    /// Get directory contents for diagnostics
+    private func getDirectoryContents(at path: URL, indent: String) -> String {
+        var info = ""
+        let fm = FileManager.default
+
+        guard let contents = try? fm.contentsOfDirectory(atPath: path.path) else {
+            return "\(indent)(unable to read directory)\n"
+        }
+
+        // Show top-level contents
+        info += "\(indent)Contents: \(contents.joined(separator: ", "))\n"
+
+        // Check for specific files we care about
+        let importantFiles = [
+            "settings.json",
+            "local-settings.json",
+            "root-state.json",
+            "Local Storage",
+            "storage",
+            "IndexedDB",
+            "Cache"
+        ]
+
+        for file in importantFiles {
+            let filePath = path.appendingPathComponent(file)
+            if fm.fileExists(atPath: filePath.path) {
+                var isDir: ObjCBool = false
+                fm.fileExists(atPath: filePath.path, isDirectory: &isDir)
+
+                if isDir.boolValue {
+                    // Show subdirectory contents
+                    if let subContents = try? fm.contentsOfDirectory(atPath: filePath.path) {
+                        info += "\(indent)  \(file)/: \(subContents.prefix(5).joined(separator: ", "))"
+                        if subContents.count > 5 {
+                            info += " (+\(subContents.count - 5) more)"
+                        }
+                        info += "\n"
+                    }
+                } else {
+                    // Show file size
+                    if let attrs = try? fm.attributesOfItem(atPath: filePath.path),
+                       let size = attrs[.size] as? Int {
+                        info += "\(indent)  \(file): \(size) bytes\n"
+                    }
+                }
+            }
+        }
+
+        return info
+    }
+
     /// Print diagnostic info to console log
     func logDiagnostics() {
         let info = getDiagnosticInfo()
-        logger.info("\(info)")
+        desktopLogger.info("\(info)")
         print(info) // Also print to stdout for Xcode console
+    }
+
+    /// Get detailed diagnostic info including file contents
+    func getDetailedDiagnostics() -> String {
+        var info = getDiagnosticInfo()
+
+        // Try to read Discord settings.json
+        info += "\n=== Discord settings.json ===\n"
+        if let discordPath = findExistingPath(from: discordCachePaths) {
+            let settingsPath = discordPath.appendingPathComponent("settings.json")
+            if let data = try? Data(contentsOf: settingsPath),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                info += "Keys: \(json.keys.sorted().joined(separator: ", "))\n"
+                // Show a few key values
+                for key in ["RECENT_GUILDS", "OPEN_ON_STARTUP", "MINIMIZE_TO_TRAY"] {
+                    if let value = json[key] {
+                        info += "  \(key): \(value)\n"
+                    }
+                }
+            } else if FileManager.default.fileExists(atPath: settingsPath.path) {
+                info += "(exists but couldn't parse as JSON)\n"
+            } else {
+                info += "(file doesn't exist)\n"
+            }
+        } else {
+            info += "(no Discord path found)\n"
+        }
+
+        // Try to read Slack files
+        info += "\n=== Slack Cache Analysis ===\n"
+        if let slackPath = findExistingPath(from: slackCachePaths) {
+            // Check root-state.json
+            let rootStatePath = slackPath.appendingPathComponent("storage/root-state.json")
+            if let data = try? Data(contentsOf: rootStatePath),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                info += "root-state.json keys: \(json.keys.sorted().prefix(10).joined(separator: ", "))\n"
+                if let teams = json["teams"] as? [String: Any] {
+                    info += "  Teams found: \(teams.count)\n"
+                    for (teamId, teamData) in teams.prefix(2) {
+                        if let team = teamData as? [String: Any],
+                           let name = team["name"] as? String {
+                            info += "    - \(name) (\(teamId.prefix(8))...)\n"
+                        }
+                    }
+                }
+            } else if FileManager.default.fileExists(atPath: rootStatePath.path) {
+                info += "root-state.json exists but couldn't parse\n"
+            } else {
+                info += "root-state.json doesn't exist\n"
+            }
+
+            // Check local-settings.json
+            let localSettingsPath = slackPath.appendingPathComponent("local-settings.json")
+            if let data = try? Data(contentsOf: localSettingsPath),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                info += "local-settings.json keys: \(json.keys.sorted().prefix(10).joined(separator: ", "))\n"
+            } else if FileManager.default.fileExists(atPath: localSettingsPath.path) {
+                info += "local-settings.json exists but couldn't parse\n"
+            } else {
+                info += "local-settings.json doesn't exist\n"
+            }
+        } else {
+            info += "(no Slack path found)\n"
+        }
+
+        return info
     }
 
     /// Find first existing path from a list
@@ -208,15 +331,15 @@ actor DesktopAppManager {
 
     /// Fetch recent Slack messages from local cache (no API needed)
     func fetchSlackUnread() async throws -> [Message] {
-        logger.info("Fetching Slack messages...")
+        desktopLogger.info("Fetching Slack messages...")
 
         // Find Slack's cache directory
         guard let slackPath = findExistingPath(from: slackCachePaths) else {
-            logger.warning("No Slack cache found. Paths checked: \(slackCachePaths.map(\.path))")
+            desktopLogger.warning("No Slack cache found. Paths checked: \(self.slackCachePaths.map(\.path))")
 
             // If Slack is running, try badge count
             if isSlackRunning {
-                logger.info("Slack is running, trying badge count...")
+                desktopLogger.info("Slack is running, trying badge count...")
                 let badgeCount = try await getSlackBadgeCount()
                 if badgeCount > 0 {
                     return [Message(
@@ -242,21 +365,21 @@ actor DesktopAppManager {
             throw DesktopAppError.appNotInstalled("Slack")
         }
 
-        logger.info("Found Slack cache at: \(slackPath.path)")
+        desktopLogger.info("Found Slack cache at: \(slackPath.path)")
 
         // Try to read from local cache
         let cachedMessages = try? readSlackLocalCache(from: slackPath)
         if let messages = cachedMessages, !messages.isEmpty {
-            logger.info("Found \(messages.count) Slack messages in cache")
+            desktopLogger.info("Found \(messages.count) Slack messages in cache")
             return messages
         }
 
-        logger.info("No messages in cache, checking badge count...")
+        desktopLogger.info("No messages in cache, checking badge count...")
 
         // Fallback to badge count
         if isSlackRunning {
             let badgeCount = try await getSlackBadgeCount()
-            logger.info("Slack badge count: \(badgeCount)")
+            desktopLogger.info("Slack badge count: \(badgeCount)")
 
             if badgeCount > 0 {
                 return [Message(
@@ -279,7 +402,7 @@ actor DesktopAppManager {
             }
         }
 
-        logger.info("No Slack messages found")
+        desktopLogger.info("No Slack messages found")
         return []
     }
 
@@ -287,20 +410,20 @@ actor DesktopAppManager {
     private func readSlackLocalCache(from basePath: URL) throws -> [Message] {
         var messages: [Message] = []
 
-        logger.info("Reading Slack cache from: \(basePath.path)")
+        desktopLogger.info("Reading Slack cache from: \(basePath.path)")
 
         // Try multiple possible cache structures
 
         // 1. Try root-state.json for workspace/user context
         let rootStatePath = basePath.appendingPathComponent("storage/root-state.json")
         if FileManager.default.fileExists(atPath: rootStatePath.path) {
-            logger.info("Found root-state.json")
+            desktopLogger.info("Found root-state.json")
             if let rootStateData = try? Data(contentsOf: rootStatePath),
                let rootState = try? JSONSerialization.jsonObject(with: rootStateData) as? [String: Any] {
 
                 // Parse workspaces and recent messages from cache
                 if let teams = rootState["teams"] as? [String: Any] {
-                    logger.info("Found \(teams.count) teams in cache")
+                    desktopLogger.info("Found \(teams.count) teams in cache")
                     for (teamId, teamData) in teams {
                         guard let team = teamData as? [String: Any],
                               let teamName = team["name"] as? String else { continue }
@@ -318,7 +441,7 @@ actor DesktopAppManager {
         // 2. Try local-settings.json for recent activity
         let localSettingsPath = basePath.appendingPathComponent("local-settings.json")
         if FileManager.default.fileExists(atPath: localSettingsPath.path) {
-            logger.info("Found local-settings.json")
+            desktopLogger.info("Found local-settings.json")
             if let settingsData = try? Data(contentsOf: localSettingsPath),
                let settings = try? JSONSerialization.jsonObject(with: settingsData) as? [String: Any] {
 
@@ -354,16 +477,16 @@ actor DesktopAppManager {
         // 3. Try IndexedDB files
         let indexedDBPath = basePath.appendingPathComponent("IndexedDB")
         if FileManager.default.fileExists(atPath: indexedDBPath.path) {
-            logger.info("Found IndexedDB directory - Slack uses encrypted storage, limited access")
+            desktopLogger.info("Found IndexedDB directory - Slack uses encrypted storage, limited access")
         }
 
         // 4. Check for notification count in storage
         let storagePath = basePath.appendingPathComponent("storage")
         if FileManager.default.fileExists(atPath: storagePath.path) {
-            logger.info("Found storage directory at: \(storagePath.path)")
+            desktopLogger.info("Found storage directory at: \(storagePath.path)")
             // List contents for debugging
             if let contents = try? FileManager.default.contentsOfDirectory(atPath: storagePath.path) {
-                logger.info("Storage contents: \(contents.prefix(10))")
+                desktopLogger.info("Storage contents: \(contents.prefix(10))")
             }
         }
 
@@ -436,35 +559,35 @@ actor DesktopAppManager {
 
     /// Fetch recent Discord messages from local cache (no API needed)
     func fetchDiscordUnread() async throws -> [Message] {
-        logger.info("Fetching Discord messages...")
+        desktopLogger.info("Fetching Discord messages...")
 
         // Find Discord's cache directory
         guard let discordPath = findExistingPath(from: discordCachePaths) else {
-            logger.warning("No Discord cache found. Paths checked: \(discordCachePaths.map(\.path))")
+            desktopLogger.warning("No Discord cache found. Paths checked: \(self.discordCachePaths.map(\.path))")
             throw DesktopAppError.appNotInstalled("Discord")
         }
 
-        logger.info("Found Discord cache at: \(discordPath.path)")
+        desktopLogger.info("Found Discord cache at: \(discordPath.path)")
 
         // Try to read from local cache
         let cachedMessages = try? readDiscordLocalCache(from: discordPath)
         if let messages = cachedMessages, !messages.isEmpty {
-            logger.info("Found \(messages.count) Discord messages in cache")
+            desktopLogger.info("Found \(messages.count) Discord messages in cache")
             return messages
         }
 
         // Also check other Discord variants (Canary, PTB)
         for otherPath in discordCachePaths where otherPath != discordPath {
             if FileManager.default.fileExists(atPath: otherPath.path) {
-                logger.info("Also checking: \(otherPath.path)")
+                desktopLogger.info("Also checking: \(otherPath.path)")
                 if let messages = try? readDiscordLocalCache(from: otherPath), !messages.isEmpty {
-                    logger.info("Found \(messages.count) messages in \(otherPath.lastPathComponent)")
+                    desktopLogger.info("Found \(messages.count) messages in \(otherPath.lastPathComponent)")
                     return messages
                 }
             }
         }
 
-        logger.info("No Discord messages found in cache")
+        desktopLogger.info("No Discord messages found in cache")
         return []
     }
 
@@ -472,34 +595,34 @@ actor DesktopAppManager {
     private func readDiscordLocalCache(from basePath: URL) throws -> [Message] {
         var messages: [Message] = []
 
-        logger.info("Reading Discord cache from: \(basePath.path)")
+        desktopLogger.info("Reading Discord cache from: \(basePath.path)")
 
         // Check what's in this directory
         if let contents = try? FileManager.default.contentsOfDirectory(atPath: basePath.path) {
-            logger.info("Discord directory contents: \(contents.prefix(10))")
+            desktopLogger.info("Discord directory contents: \(contents.prefix(10))")
         }
 
         // Read local storage for recent DMs and mentions
         let localStoragePath = basePath.appendingPathComponent("Local Storage/leveldb")
         if FileManager.default.fileExists(atPath: localStoragePath.path) {
-            logger.info("Found LevelDB at: \(localStoragePath.path)")
+            desktopLogger.info("Found LevelDB at: \(localStoragePath.path)")
             if let localMessages = readDiscordLevelDB(at: localStoragePath) {
-                logger.info("Extracted \(localMessages.count) messages from LevelDB")
+                desktopLogger.info("Extracted \(localMessages.count) messages from LevelDB")
                 messages.append(contentsOf: localMessages)
             }
         } else {
-            logger.info("No LevelDB found at: \(localStoragePath.path)")
+            desktopLogger.info("No LevelDB found at: \(localStoragePath.path)")
         }
 
         // Read settings for user info and recent activity
         let settingsPath = basePath.appendingPathComponent("settings.json")
         if FileManager.default.fileExists(atPath: settingsPath.path) {
-            logger.info("Found settings.json")
+            desktopLogger.info("Found settings.json")
             if let data = try? Data(contentsOf: settingsPath),
                let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 // Extract recent guild/server info
                 if let recentGuilds = settings["RECENT_GUILDS"] as? [String] {
-                    logger.info("Found \(recentGuilds.count) recent guilds")
+                    desktopLogger.info("Found \(recentGuilds.count) recent guilds")
                     for guildId in recentGuilds.prefix(5) {
                         messages.append(Message(
                             id: "discord:guild:\(guildId)",
@@ -522,7 +645,7 @@ actor DesktopAppManager {
                 }
             }
         } else {
-            logger.info("No settings.json found at: \(settingsPath.path)")
+            desktopLogger.info("No settings.json found at: \(settingsPath.path)")
         }
 
         // Read from Cache.db (SQLite HTTP cache) - check multiple variants
@@ -537,7 +660,7 @@ actor DesktopAppManager {
                 .appendingPathComponent("Library/Caches/\(variant)/Cache.db")
 
             if FileManager.default.fileExists(atPath: cacheDBPath.path) {
-                logger.info("Found Discord cache DB at: \(cacheDBPath.path)")
+                desktopLogger.info("Found Discord cache DB at: \(cacheDBPath.path)")
                 if let cacheMessages = readDiscordCacheDB(at: cacheDBPath) {
                     messages.append(contentsOf: cacheMessages)
                     break // Found messages, stop searching

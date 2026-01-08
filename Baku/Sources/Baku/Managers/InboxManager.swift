@@ -2,7 +2,7 @@ import Foundation
 import Combine
 import os.log
 
-private let logger = Logger(subsystem: "com.baku.app", category: "InboxManager")
+private let inboxLogger = Logger(subsystem: "com.baku.app", category: "InboxManager")
 
 /// Manages fetching messages from all connected platforms
 @MainActor
@@ -38,16 +38,27 @@ class InboxManager: ObservableObject {
     func connectPlatform(_ platform: Platform) async {
         let method = settings.getConnectionMethod(for: platform)
 
+        // Discord user token - check if token is configured
+        if method == .discordUserToken {
+            if settings.getCredential(platform: .discord, key: "user_token") != nil {
+                connectedPlatforms.insert(platform)
+                inboxLogger.info("Using Discord user token for \(platform.displayName)")
+            } else {
+                inboxLogger.warning("Discord user token not configured")
+            }
+            return
+        }
+
         // Desktop integrations don't need MCP connection
         if method.isDesktopIntegration {
             connectedPlatforms.insert(platform)
-            logger.info("Using desktop integration for \(platform.displayName)")
+            inboxLogger.info("Using desktop integration for \(platform.displayName)")
             return
         }
 
         // MCP server connection
         guard let serverPath = mcpServerPath(for: platform) else {
-            logger.warning("No MCP server found for \(platform.displayName)")
+            inboxLogger.warning("No MCP server found for \(platform.displayName)")
             return
         }
 
@@ -60,9 +71,9 @@ class InboxManager: ObservableObject {
             try await client.start()
             mcpClients[platform] = client
             connectedPlatforms.insert(platform)
-            logger.info("Connected to \(platform.displayName) via MCP")
+            inboxLogger.info("Connected to \(platform.displayName) via MCP")
         } catch {
-            logger.error("Failed to connect \(platform.displayName): \(error.localizedDescription)")
+            inboxLogger.error("Failed to connect \(platform.displayName): \(error.localizedDescription)")
         }
     }
 
@@ -107,7 +118,7 @@ class InboxManager: ObservableObject {
         var allMessages: [Message] = []
         var errors: [String] = []
 
-        logger.info("Fetching from \(self.connectedPlatforms.count) platforms: \(self.connectedPlatforms.map(\.rawValue))")
+        inboxLogger.info("Fetching from \(self.connectedPlatforms.count) platforms: \(self.connectedPlatforms.map(\.rawValue))")
 
         // Log diagnostics before fetch
         await desktopManager.logDiagnostics()
@@ -117,12 +128,12 @@ class InboxManager: ObservableObject {
             for platform in connectedPlatforms {
                 group.addTask {
                     do {
-                        logger.info("Fetching from \(platform.displayName)...")
+                        inboxLogger.info("Fetching from \(platform.displayName)...")
                         let messages = try await self.fetchFromPlatform(platform)
-                        logger.info("Got \(messages.count) messages from \(platform.displayName)")
+                        inboxLogger.info("Got \(messages.count) messages from \(platform.displayName)")
                         return (platform, .success(messages))
                     } catch {
-                        logger.error("Failed to fetch from \(platform.displayName): \(error.localizedDescription)")
+                        inboxLogger.error("Failed to fetch from \(platform.displayName): \(error.localizedDescription)")
                         return (platform, .failure(error))
                     }
                 }
@@ -141,19 +152,24 @@ class InboxManager: ObservableObject {
         // Store error summary for UI display
         if !errors.isEmpty {
             lastErrorMessage = errors.joined(separator: "\n")
-            logger.warning("Errors during fetch: \(errors)")
+            inboxLogger.warning("Errors during fetch: \(errors)")
         }
 
         // Sort by timestamp (newest first)
         let sorted = allMessages.sorted { $0.timestamp > $1.timestamp }
         messages = sorted
-        logger.info("Total messages fetched: \(sorted.count)")
+        inboxLogger.info("Total messages fetched: \(sorted.count)")
         return sorted
     }
 
     /// Fetch messages from a specific platform
     func fetchFromPlatform(_ platform: Platform) async throws -> [Message] {
         let method = settings.getConnectionMethod(for: platform)
+
+        // Use Discord user token if configured
+        if method == .discordUserToken {
+            return try await DiscordManager.shared.fetchMessages()
+        }
 
         // Use desktop integration if configured
         if method.isDesktopIntegration {
@@ -317,7 +333,8 @@ class InboxManager: ObservableObject {
         }
 
         info += "\n"
-        info += await desktopManager.getDiagnosticInfo()
+        // Use detailed diagnostics to show file contents
+        info += await desktopManager.getDetailedDiagnostics()
 
         return info
     }
