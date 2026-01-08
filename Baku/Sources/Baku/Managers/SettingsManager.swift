@@ -1,6 +1,10 @@
 import Foundation
 import Defaults
 import Security
+import Combine
+import os.log
+
+private let settingsLogger = Logger(subsystem: "com.baku.app", category: "SettingsManager")
 
 /// Manages app settings and credentials
 @MainActor
@@ -23,10 +27,16 @@ class SettingsManager: ObservableObject {
     private var credentialCache: [String: String] = [:]
     private var credentialCacheLoaded = false
 
+    // MARK: - Auto-save observers
+    private var cancellables = Set<AnyCancellable>()
+    private var isLoading = true // Prevent saving during initial load
+
     // MARK: - Initialization
 
     init() {
         loadSettings()
+        setupAutoSave()
+        isLoading = false
     }
 
     private func loadSettings() {
@@ -58,6 +68,68 @@ class SettingsManager: ObservableObject {
         discordSelectedGuilds = Set(Defaults[.discordSelectedGuilds])
         discordSelectedDMs = Set(Defaults[.discordSelectedDMs])
         discordIncludeDMs = Defaults[.discordIncludeDMs]
+    }
+
+    /// Setup Combine observers to auto-save when @Published properties change
+    private func setupAutoSave() {
+        // Auto-save enabled platforms
+        $enabledPlatforms
+            .dropFirst() // Skip initial value
+            .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
+            .sink { [weak self] platforms in
+                guard self?.isLoading == false else { return }
+                settingsLogger.info("Auto-saving enabledPlatforms: \(platforms.map(\.rawValue))")
+                Defaults[.enabledPlatforms] = platforms.map { $0.rawValue }
+            }
+            .store(in: &cancellables)
+
+        // Auto-save connection methods
+        $connectionMethods
+            .dropFirst()
+            .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
+            .sink { [weak self] methods in
+                guard self?.isLoading == false else { return }
+                var saved: [String: String] = [:]
+                for (platform, method) in methods {
+                    saved[platform.rawValue] = method.rawValue
+                }
+                settingsLogger.info("Auto-saving connectionMethods: \(saved)")
+                Defaults[.connectionMethods] = saved
+            }
+            .store(in: &cancellables)
+
+        // Auto-save Discord guilds
+        $discordSelectedGuilds
+            .dropFirst()
+            .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
+            .sink { [weak self] guilds in
+                guard self?.isLoading == false else { return }
+                settingsLogger.info("Auto-saving discordSelectedGuilds: \(guilds.count) guilds")
+                Defaults[.discordSelectedGuilds] = Array(guilds)
+            }
+            .store(in: &cancellables)
+
+        // Auto-save Discord DMs
+        $discordSelectedDMs
+            .dropFirst()
+            .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
+            .sink { [weak self] dms in
+                guard self?.isLoading == false else { return }
+                settingsLogger.info("Auto-saving discordSelectedDMs: \(dms.count) DMs")
+                Defaults[.discordSelectedDMs] = Array(dms)
+            }
+            .store(in: &cancellables)
+
+        // Auto-save Discord include DMs toggle
+        $discordIncludeDMs
+            .dropFirst()
+            .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
+            .sink { [weak self] include in
+                guard self?.isLoading == false else { return }
+                settingsLogger.info("Auto-saving discordIncludeDMs: \(include)")
+                Defaults[.discordIncludeDMs] = include
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Connection Methods
@@ -204,7 +276,8 @@ class SettingsManager: ObservableObject {
     /// Load all credentials into cache on first access (single keychain prompt)
     private func loadCredentialCacheIfNeeded() {
         guard !credentialCacheLoaded else { return }
-        credentialCacheLoaded = true
+
+        settingsLogger.info("Loading credentials from keychain...")
 
         // Query all items for our service at once
         let query: [String: Any] = [
@@ -218,8 +291,30 @@ class SettingsManager: ObservableObject {
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
 
-        guard status == errSecSuccess,
-              let items = result as? [[String: Any]] else {
+        if status == errSecItemNotFound {
+            settingsLogger.info("No credentials in keychain (first run)")
+            credentialCacheLoaded = true
+            return
+        }
+
+        if status == errSecUserCanceled || status == errSecAuthFailed || status == errSecInteractionNotAllowed {
+            // User denied access or keychain is locked - DON'T mark as loaded so we can retry
+            settingsLogger.warning("Keychain access denied or locked (status \(status)) - will retry next access")
+            return
+        }
+
+        if status != errSecSuccess {
+            settingsLogger.error("Keychain query failed with status: \(status)")
+            // For other errors, mark as loaded to avoid infinite prompts
+            credentialCacheLoaded = true
+            return
+        }
+
+        // Success - mark as loaded and populate cache
+        credentialCacheLoaded = true
+
+        guard let items = result as? [[String: Any]] else {
+            settingsLogger.warning("Keychain returned unexpected format")
             return
         }
 
@@ -228,15 +323,25 @@ class SettingsManager: ObservableObject {
                let data = item[kSecValueData as String] as? Data,
                let value = String(data: data, encoding: .utf8) {
                 credentialCache[account] = value
+                settingsLogger.info("Loaded credential: \(account)")
             }
         }
+
+        settingsLogger.info("Loaded \(self.credentialCache.count) credentials from keychain")
     }
 
     func setCredential(platform: Platform, key: String, value: String) {
         let account = "\(platform.rawValue)_\(key)"
 
+        settingsLogger.info("Saving credential: \(account)")
+
         // Update cache immediately
         credentialCache[account] = value
+        credentialCacheLoaded = true // Mark loaded since we now have data
+
+        // Also save to UserDefaults as backup (for development builds with signing issues)
+        UserDefaults.standard.set(value, forKey: "credential_\(account)")
+        settingsLogger.info("Saved credential to UserDefaults backup: \(account)")
 
         // Delete existing from keychain
         let deleteQuery: [String: Any] = [
@@ -244,7 +349,10 @@ class SettingsManager: ObservableObject {
             kSecAttrService as String: keychainService,
             kSecAttrAccount as String: account
         ]
-        SecItemDelete(deleteQuery as CFDictionary)
+        let deleteStatus = SecItemDelete(deleteQuery as CFDictionary)
+        if deleteStatus != errSecSuccess && deleteStatus != errSecItemNotFound {
+            settingsLogger.warning("Keychain delete returned: \(deleteStatus)")
+        }
 
         // Add new with accessible attribute to reduce prompts
         let addQuery: [String: Any] = [
@@ -252,9 +360,16 @@ class SettingsManager: ObservableObject {
             kSecAttrService as String: keychainService,
             kSecAttrAccount as String: account,
             kSecValueData as String: value.data(using: .utf8)!,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
         ]
-        SecItemAdd(addQuery as CFDictionary, nil)
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+
+        if addStatus == errSecSuccess {
+            settingsLogger.info("Credential saved to keychain: \(account)")
+        } else {
+            settingsLogger.error("Keychain save FAILED for \(account): status \(addStatus)")
+            settingsLogger.info("Using UserDefaults backup for \(account)")
+        }
     }
 
     func getCredential(platform: Platform, key: String) -> String? {
@@ -262,19 +377,41 @@ class SettingsManager: ObservableObject {
 
         // Check cache first
         if credentialCacheLoaded {
-            return credentialCache[account]
+            if let value = credentialCache[account] {
+                settingsLogger.debug("getCredential \(account): found in cache")
+                return value
+            }
+        } else {
+            // Load all credentials into cache (single keychain access)
+            loadCredentialCacheIfNeeded()
+            if let value = credentialCache[account] {
+                settingsLogger.debug("getCredential \(account): found in keychain")
+                return value
+            }
         }
 
-        // Load all credentials into cache (single keychain access)
-        loadCredentialCacheIfNeeded()
-        return credentialCache[account]
+        // Fallback to UserDefaults backup (for development builds)
+        if let backupValue = UserDefaults.standard.string(forKey: "credential_\(account)") {
+            settingsLogger.info("getCredential \(account): found in UserDefaults backup")
+            // Populate cache from backup
+            credentialCache[account] = backupValue
+            return backupValue
+        }
+
+        settingsLogger.debug("getCredential \(account): not found anywhere")
+        return nil
     }
 
     func deleteCredential(platform: Platform, key: String) {
         let account = "\(platform.rawValue)_\(key)"
 
+        settingsLogger.info("Deleting credential: \(account)")
+
         // Remove from cache
         credentialCache.removeValue(forKey: account)
+
+        // Remove from UserDefaults backup
+        UserDefaults.standard.removeObject(forKey: "credential_\(account)")
 
         // Remove from keychain
         let query: [String: Any] = [
@@ -282,10 +419,15 @@ class SettingsManager: ObservableObject {
             kSecAttrService as String: keychainService,
             kSecAttrAccount as String: account
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        if status != errSecSuccess && status != errSecItemNotFound {
+            settingsLogger.warning("Keychain delete returned: \(status)")
+        }
     }
 
     func clearAllCredentials(for platform: Platform) {
+        settingsLogger.info("Clearing all credentials for: \(platform.rawValue)")
+
         let keys: [String]
         switch platform {
         case .gmail: keys = ["client_id", "client_secret", "access_token", "refresh_token"]
@@ -304,9 +446,18 @@ class SettingsManager: ObservableObject {
 
     /// Force reload credentials from keychain (use after "Always Allow")
     func reloadCredentials() {
+        settingsLogger.info("Force reloading credentials from keychain")
         credentialCache.removeAll()
         credentialCacheLoaded = false
         loadCredentialCacheIfNeeded()
+    }
+
+    /// Debug: print current cache state
+    func debugPrintCache() {
+        settingsLogger.info("Cache loaded: \(self.credentialCacheLoaded), items: \(self.credentialCache.count)")
+        for (key, _) in credentialCache {
+            settingsLogger.info("  - \(key): (value hidden)")
+        }
     }
 }
 

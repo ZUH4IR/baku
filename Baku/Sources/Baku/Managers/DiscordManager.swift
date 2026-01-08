@@ -133,7 +133,30 @@ class DiscordManager: ObservableObject {
             // Ensure we have DM channels loaded
             if dmChannels.isEmpty {
                 discordLogger.info("Loading DM channels...")
-                _ = try? await fetchDMChannels()
+                do {
+                    _ = try await fetchDMChannels()
+                    discordLogger.info("Loaded \(self.dmChannels.count) DM channels")
+                } catch {
+                    discordLogger.error("Failed to load DM channels: \(error.localizedDescription)")
+                    // Add error message so user knows what went wrong
+                    messages.append(Message(
+                        id: "discord:error:\(UUID().uuidString)",
+                        platform: .discord,
+                        platformMessageId: "error",
+                        senderName: "Discord",
+                        senderHandle: nil,
+                        senderAvatarURL: nil,
+                        subject: nil,
+                        content: "Failed to load Discord: \(error.localizedDescription)",
+                        timestamp: Date(),
+                        channelName: "Error",
+                        threadId: nil,
+                        priority: .high,
+                        needsResponse: false,
+                        isRead: false,
+                        draft: nil
+                    ))
+                }
             }
 
             if !selectedDMIds.isEmpty {

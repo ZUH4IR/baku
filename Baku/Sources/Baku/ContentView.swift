@@ -5,6 +5,10 @@ struct ContentView: View {
     @ObservedObject var viewModel: BakuViewModel
     @State private var showingSettings = false
     @State private var selectedTab: MainTab = .inbox
+    @State private var diagnosticMessage: Message?
+    @State private var isRunningDiagnostics = false
+    @State private var isFixing = false
+    @State private var fixOutput: String = ""
 
     enum MainTab: String, CaseIterable {
         case inbox = "Inbox"
@@ -133,22 +137,26 @@ struct ContentView: View {
 
             switch selectedTab {
             case .inbox:
-                if inboxMessages.isEmpty {
-                    emptyState(
-                        icon: "tray",
-                        title: "No messages",
-                        subtitle: "Configure platforms in Settings"
-                    )
+                if viewModel.isLoading && viewModel.lastFetchTime == nil {
+                    // Initial loading state
+                    VStack(spacing: 16) {
+                        Spacer()
+                        ProgressView()
+                            .scaleEffect(1.2)
+                            .tint(.white)
+                        Text("Loading inbox...")
+                            .font(.system(size: 14))
+                            .foregroundColor(.white.opacity(0.6))
+                        Spacer()
+                    }
+                } else if inboxMessages.isEmpty {
+                    inboxEmptyState
                 } else {
                     messageList(messages: inboxMessages)
                 }
             case .pulse:
                 if pulseMessages.isEmpty {
-                    emptyState(
-                        icon: "waveform.path.ecg",
-                        title: "No pulse data",
-                        subtitle: "Enable Markets, News, or Predictions"
-                    )
+                    emptyPulseState
                 } else {
                     pulseList
                 }
@@ -174,6 +182,227 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .tint(.white.opacity(0.3))
             Spacer()
+        }
+    }
+
+    /// Inbox empty state that shows connected platform status
+    private var inboxEmptyState: some View {
+        let connectedPlatforms = InboxManager.shared.connectedPlatforms.filter { !$0.isInfoPulse }
+        let hasError = viewModel.errorMessage != nil
+
+        return VStack(spacing: 16) {
+            Spacer()
+
+            Image(systemName: hasError ? "exclamationmark.triangle" : "checkmark.circle")
+                .font(.system(size: 36))
+                .foregroundColor(hasError ? .orange.opacity(0.7) : .green.opacity(0.6))
+
+            if connectedPlatforms.isEmpty {
+                Text("No platforms connected")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+
+                Text("Enable platforms in Settings to see messages")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.4))
+            } else {
+                Text("All caught up!")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+
+                // Show connected platforms
+                HStack(spacing: 12) {
+                    ForEach(Array(connectedPlatforms), id: \.self) { platform in
+                        HStack(spacing: 4) {
+                            Image(systemName: platform.iconName)
+                                .font(.system(size: 12))
+                            Text(platform.displayName)
+                                .font(.system(size: 11))
+                        }
+                        .foregroundColor(platform.accentColor.opacity(0.8))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(platform.accentColor.opacity(0.15))
+                        .cornerRadius(6)
+                    }
+                }
+
+                Text("No new messages from connected platforms")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.4))
+            }
+
+            if let error = viewModel.errorMessage {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundColor(.orange.opacity(0.8))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+            }
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await viewModel.refresh() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .tint(.blue.opacity(0.8))
+
+                Button("Settings") {
+                    showingSettings = true
+                }
+                .buttonStyle(.bordered)
+                .tint(.white.opacity(0.3))
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+    }
+
+    /// Empty pulse state with auto-diagnosis
+    @ViewBuilder
+    private var emptyPulseState: some View {
+        if viewModel.isLoading || viewModel.lastFetchTime == nil {
+            // Still loading initial data - show loading state, not diagnostics
+            VStack(spacing: 16) {
+                Spacer()
+                ProgressView()
+                    .scaleEffect(1.2)
+                    .tint(.white)
+                Text("Loading pulses...")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.6))
+                Text("Connecting to data sources")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.4))
+                Spacer()
+            }
+        } else if isFixing {
+            // Show fix progress
+            VStack(spacing: 16) {
+                Spacer()
+                ProgressView()
+                    .scaleEffect(1.2)
+                    .tint(.green)
+                Text("Fixing...")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                Text(fixOutput.isEmpty ? "Building MCP servers..." : fixOutput.components(separatedBy: "\n").last ?? "")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.6))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+        } else if let diagnostic = diagnosticMessage {
+            // Show diagnostic result as a pulse card
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    PulseCard(message: diagnostic)
+
+                    // Action buttons
+                    HStack(spacing: 10) {
+                        // Fix button - primary action
+                        Button {
+                            Task { await autoFix() }
+                        } label: {
+                            Label("Fix", systemImage: "wrench.and.screwdriver")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+
+                        Button {
+                            Task { await viewModel.refresh() }
+                        } label: {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.blue)
+
+                        Button {
+                            diagnosticMessage = nil
+                            Task { await runDiagnostics() }
+                        } label: {
+                            Label("Re-diagnose", systemImage: "stethoscope")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.orange)
+                    }
+                    .padding(.top, 8)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .scrollIndicators(.hidden)
+        } else if isRunningDiagnostics {
+            VStack(spacing: 16) {
+                Spacer()
+                ProgressView()
+                    .scaleEffect(1.2)
+                    .tint(.white)
+                Text("Diagnosing...")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.6))
+                Text("Using Claude to analyze connection issues")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.4))
+                Spacer()
+            }
+        } else {
+            VStack(spacing: 12) {
+                Spacer()
+                Image(systemName: "waveform.path.ecg")
+                    .font(.system(size: 40))
+                    .foregroundColor(.white.opacity(0.3))
+                Text("No pulse data")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.5))
+                Text("Running diagnostics...")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.3))
+                Spacer()
+            }
+            .onAppear {
+                Task { await runDiagnostics() }
+            }
+        }
+    }
+
+    private func runDiagnostics() async {
+        isRunningDiagnostics = true
+        let diagnostic = await InboxManager.shared.debugEmptyPulses()
+        diagnosticMessage = diagnostic
+        isRunningDiagnostics = false
+    }
+
+    private func autoFix() async {
+        isFixing = true
+        fixOutput = ""
+
+        // Run the fix and refresh
+        let result = await InboxManager.shared.autoFixPulses { progress in
+            Task { @MainActor in
+                fixOutput = progress
+            }
+        }
+
+        fixOutput = result
+
+        // Wait a moment to show completion
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        isFixing = false
+        diagnosticMessage = nil
+
+        // Refresh to check if it worked
+        await viewModel.refresh()
+
+        // Re-run diagnostics if still empty
+        if pulseMessages.isEmpty {
+            await runDiagnostics()
         }
     }
 
@@ -357,6 +586,7 @@ private struct PulseCard: View {
                 .foregroundColor(.white.opacity(0.8))
                 .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
         }
         .padding(14)
         .background(
