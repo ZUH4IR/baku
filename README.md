@@ -1,14 +1,16 @@
-# Baku - Morning Productivity Agent
+# Baku
 
-A lightweight SwiftUI notch app that lives in your Mac's notch area, fetches messages from Discord, Slack, Gmail, and Twitter, and uses Claude to pre-generate response drafts.
+Your AI-powered productivity companion that lives in the Mac notch. Stay on top of everything—messages, mentions, and more—with Claude-generated response drafts.
 
 ## Features
 
-- **Notch Integration** - Lives in your Mac's notch area, expands on hover
-- **Multi-Platform Inbox** - Gmail, Slack, Discord, Twitter in one place
-- **AI Drafts** - Claude generates response drafts for you
-- **Morning Automation** - Fetches messages automatically each morning
-- **Beautiful UI** - Dark mode, native Mac feel, smooth animations
+- **Always Available** - Lives in your Mac's notch, one hover away
+- **Unified Inbox** - Gmail, Slack, Discord, Twitter, and tech news in one place
+- **AI-Powered Drafts** - Claude generates contextual response drafts instantly
+- **Smart Prioritization** - AI ranks messages by urgency so you focus on what matters
+- **Scheduled Sync** - Auto-fetch on your schedule (morning, hourly, or custom)
+- **Works with Claude Code** - Uses your existing Claude authentication, no extra setup
+- **Native Experience** - Beautiful SwiftUI app with dark mode and smooth animations
 
 ## Architecture
 
@@ -38,7 +40,7 @@ A lightweight SwiftUI notch app that lives in your Mac's notch area, fetches mes
 - Mac with notch (MacBook Pro 2021+)
 - Xcode 15+ (for building)
 - Node.js 18+ (for MCP servers)
-- Claude API key (for AI drafts)
+- Claude Code installed (uses your existing login) or Anthropic API key
 
 ---
 
