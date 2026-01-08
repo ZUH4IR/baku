@@ -1,5 +1,8 @@
 import Foundation
 import Combine
+import os.log
+
+private let logger = Logger(subsystem: "com.baku.app", category: "InboxManager")
 
 /// Manages fetching messages from all connected platforms
 @MainActor
@@ -9,6 +12,7 @@ class InboxManager: ObservableObject {
     @Published var messages: [Message] = []
     @Published var isLoading: Bool = false
     @Published var lastError: Error?
+    @Published var lastErrorMessage: String?
     @Published var connectedPlatforms: Set<Platform> = []
 
     private var mcpClients: [Platform: MCPClient] = [:]
@@ -97,31 +101,53 @@ class InboxManager: ObservableObject {
     /// Fetch all messages from all connected platforms
     func fetchAll() async throws -> [Message] {
         isLoading = true
+        lastErrorMessage = nil
         defer { isLoading = false }
 
         var allMessages: [Message] = []
+        var errors: [String] = []
+
+        logger.info("Fetching from \(self.connectedPlatforms.count) platforms: \(self.connectedPlatforms.map(\.rawValue))")
+
+        // Log diagnostics before fetch
+        await desktopManager.logDiagnostics()
 
         // Fetch from all connected platforms in parallel
-        await withTaskGroup(of: [Message].self) { group in
+        await withTaskGroup(of: (Platform, Result<[Message], Error>).self) { group in
             for platform in connectedPlatforms {
                 group.addTask {
                     do {
-                        return try await self.fetchFromPlatform(platform)
+                        logger.info("Fetching from \(platform.displayName)...")
+                        let messages = try await self.fetchFromPlatform(platform)
+                        logger.info("Got \(messages.count) messages from \(platform.displayName)")
+                        return (platform, .success(messages))
                     } catch {
-                        print("Failed to fetch from \(platform.displayName): \(error)")
-                        return []
+                        logger.error("Failed to fetch from \(platform.displayName): \(error.localizedDescription)")
+                        return (platform, .failure(error))
                     }
                 }
             }
 
-            for await platformMessages in group {
-                allMessages.append(contentsOf: platformMessages)
+            for await (platform, result) in group {
+                switch result {
+                case .success(let msgs):
+                    allMessages.append(contentsOf: msgs)
+                case .failure(let error):
+                    errors.append("\(platform.displayName): \(error.localizedDescription)")
+                }
             }
+        }
+
+        // Store error summary for UI display
+        if !errors.isEmpty {
+            lastErrorMessage = errors.joined(separator: "\n")
+            logger.warning("Errors during fetch: \(errors)")
         }
 
         // Sort by timestamp (newest first)
         let sorted = allMessages.sorted { $0.timestamp > $1.timestamp }
         messages = sorted
+        logger.info("Total messages fetched: \(sorted.count)")
         return sorted
     }
 
@@ -159,6 +185,8 @@ class InboxManager: ObservableObject {
             return try await desktopManager.fetchSlackUnread()
         case .discordDesktop:
             return try await desktopManager.fetchDiscordUnread()
+        case .imessageLocal:
+            return try await desktopManager.fetchIMessageUnread()
         default:
             return []
         }
@@ -169,8 +197,12 @@ class InboxManager: ObservableObject {
         case .gmail: return "gmail_list_unread"
         case .slack: return "slack_get_mentions"
         case .discord: return "discord_list_dms"
+        case .imessage: return "imessage_list_recent" // Desktop integration only
         case .twitter: return "twitter_get_mentions"
         case .grok: return "grok_tech_pulse"
+        case .markets: return "markets_pulse"
+        case .news: return "news_pulse"
+        case .predictions: return "predictions_pulse"
         }
     }
 
@@ -188,11 +220,23 @@ class InboxManager: ObservableObject {
         case .discord:
             let discordMessages = try decoder.decode([DiscordMessage].self, from: data)
             return discordMessages.map { $0.toMessage() }
+        case .imessage:
+            // iMessage is desktop-only, handled by fetchViaDesktop
+            return []
         case .twitter:
             let tweets = try decoder.decode([TwitterMessage].self, from: data)
             return tweets.map { $0.toMessage() }
         case .grok:
             let pulse = try decoder.decode(GrokPulse.self, from: data)
+            return [pulse.toMessage()]
+        case .markets:
+            let pulse = try decoder.decode(MarketsPulse.self, from: data)
+            return [pulse.toMessage()]
+        case .news:
+            let pulse = try decoder.decode(NewsPulse.self, from: data)
+            return [pulse.toMessage()]
+        case .predictions:
+            let pulse = try decoder.decode(PredictionsPulse.self, from: data)
             return [pulse.toMessage()]
         }
     }
@@ -228,13 +272,19 @@ class InboxManager: ObservableObject {
                 "channelId": message.platformMessageId,
                 "content": content
             ])
+        case .imessage:
+            // iMessage sends via AppleScript, handled separately
+            return ("imessage_send", [
+                "recipient": message.senderHandle ?? "",
+                "content": content
+            ])
         case .twitter:
             return ("twitter_reply", [
                 "tweetId": message.platformMessageId,
                 "text": content
             ])
-        case .grok:
-            // Grok is info-only, no replies
+        case .grok, .markets, .news, .predictions:
+            // Info pulses are read-only, no replies
             return ("", [:])
         }
     }
@@ -243,6 +293,33 @@ class InboxManager: ObservableObject {
 
     func loadSampleData() {
         messages = Message.sampleMessages
+    }
+
+    // MARK: - Diagnostics
+
+    /// Get diagnostic info about platform connections
+    func getDiagnostics() async -> String {
+        var info = "=== Inbox Manager Diagnostics ===\n\n"
+
+        info += "CONNECTED PLATFORMS:\n"
+        for platform in connectedPlatforms {
+            let method = settings.getConnectionMethod(for: platform)
+            info += "  • \(platform.displayName) via \(method.displayName)\n"
+        }
+
+        if connectedPlatforms.isEmpty {
+            info += "  (none)\n"
+        }
+
+        info += "\nENABLED PLATFORMS:\n"
+        for platform in Platform.allCases where settings.isPlatformEnabled(platform) {
+            info += "  • \(platform.displayName)\n"
+        }
+
+        info += "\n"
+        info += await desktopManager.getDiagnosticInfo()
+
+        return info
     }
 }
 
@@ -406,6 +483,140 @@ private struct GrokPulse: Codable {
             content: content,
             timestamp: timestampDate,
             channelName: focus,
+            threadId: nil,
+            priority: .low,
+            needsResponse: false,
+            isRead: false,
+            draft: nil
+        )
+    }
+}
+
+private struct MarketsPulse: Codable {
+    let type: String
+    let timestamp: String?
+    let summary: String?
+    let error: String?
+
+    func toMessage() -> Message {
+        let content = summary ?? error ?? "No market data available"
+        let timestampDate: Date
+        if let ts = timestamp, let date = ISO8601DateFormatter().date(from: ts) {
+            timestampDate = date
+        } else {
+            timestampDate = Date()
+        }
+
+        return Message(
+            id: "markets:\(UUID().uuidString)",
+            platform: .markets,
+            platformMessageId: "pulse",
+            senderName: "Markets",
+            senderHandle: nil,
+            senderAvatarURL: nil,
+            subject: "Markets Snapshot",
+            content: content,
+            timestamp: timestampDate,
+            channelName: nil,
+            threadId: nil,
+            priority: .low,
+            needsResponse: false,
+            isRead: false,
+            draft: nil
+        )
+    }
+}
+
+private struct NewsPulse: Codable {
+    let type: String
+    let timestamp: String?
+    let topHeadlines: [NewsHeadline]?
+    let error: String?
+
+    struct NewsHeadline: Codable {
+        let title: String
+        let source: String?
+        let time: String?
+    }
+
+    func toMessage() -> Message {
+        let content: String
+        if let headlines = topHeadlines, !headlines.isEmpty {
+            content = headlines.prefix(5).map { "• \($0.title)" }.joined(separator: "\n")
+        } else {
+            content = error ?? "No news available"
+        }
+
+        let timestampDate: Date
+        if let ts = timestamp, let date = ISO8601DateFormatter().date(from: ts) {
+            timestampDate = date
+        } else {
+            timestampDate = Date()
+        }
+
+        return Message(
+            id: "news:\(UUID().uuidString)",
+            platform: .news,
+            platformMessageId: "pulse",
+            senderName: "News",
+            senderHandle: nil,
+            senderAvatarURL: nil,
+            subject: "Tech Headlines",
+            content: content,
+            timestamp: timestampDate,
+            channelName: nil,
+            threadId: nil,
+            priority: .low,
+            needsResponse: false,
+            isRead: false,
+            draft: nil
+        )
+    }
+}
+
+private struct PredictionsPulse: Codable {
+    let type: String
+    let timestamp: String?
+    let summary: String?
+    let markets: [PredictionMarket]?
+    let error: String?
+
+    struct PredictionMarket: Codable {
+        let title: String
+        let volume: String?
+        let topOutcome: String?
+    }
+
+    func toMessage() -> Message {
+        let content: String
+        if let markets = markets, !markets.isEmpty {
+            content = markets.prefix(5).map { m in
+                "• \(m.title): \(m.topOutcome ?? "N/A")"
+            }.joined(separator: "\n")
+        } else if let summary = summary {
+            content = summary
+        } else {
+            content = error ?? "No prediction data available"
+        }
+
+        let timestampDate: Date
+        if let ts = timestamp, let date = ISO8601DateFormatter().date(from: ts) {
+            timestampDate = date
+        } else {
+            timestampDate = Date()
+        }
+
+        return Message(
+            id: "predictions:\(UUID().uuidString)",
+            platform: .predictions,
+            platformMessageId: "pulse",
+            senderName: "Polymarket",
+            senderHandle: nil,
+            senderAvatarURL: nil,
+            subject: "Prediction Markets",
+            content: content,
+            timestamp: timestampDate,
+            channelName: nil,
             threadId: nil,
             priority: .low,
             needsResponse: false,

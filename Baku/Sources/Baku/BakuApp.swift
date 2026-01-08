@@ -2,6 +2,7 @@ import SwiftUI
 import Defaults
 import AppKit
 import KeyboardShortcuts
+import GoogleSignIn
 import os
 
 /// Global logger for Baku - view logs in Console.app with subsystem "com.baku.app"
@@ -169,5 +170,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         return false
+    }
+
+    // MARK: - URL Handling (Google OAuth callback)
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            // Handle Google Sign-In callback
+            if GIDSignIn.sharedInstance.handle(url) {
+                logger.info("Handled Google Sign-In URL callback")
+                continue
+            }
+        }
     }
 }

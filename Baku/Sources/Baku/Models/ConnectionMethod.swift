@@ -16,12 +16,20 @@ enum ConnectionMethod: String, Codable, Identifiable {
     case discordDesktop = "discord_desktop"
     case discordBot = "discord_bot"
 
+    // iMessage
+    case imessageLocal = "imessage_local"
+
     // Twitter
     case twitterOAuth = "twitter_oauth"
     case twitterAPI = "twitter_api"
 
     // Grok/Tech Pulse
     case grokAPI = "grok_api"
+
+    // Free public APIs (no auth needed)
+    case marketsPublic = "markets_public"
+    case newsPublic = "news_public"
+    case predictionsPublic = "predictions_public"
 
     var id: String { rawValue }
 
@@ -30,8 +38,12 @@ enum ConnectionMethod: String, Codable, Identifiable {
         case .gmailOAuth, .gmailMailApp, .gmailIMAP: return .gmail
         case .slackDesktop, .slackOAuth, .slackBot: return .slack
         case .discordDesktop, .discordBot: return .discord
+        case .imessageLocal: return .imessage
         case .twitterOAuth, .twitterAPI: return .twitter
         case .grokAPI: return .grok
+        case .marketsPublic: return .markets
+        case .newsPublic: return .news
+        case .predictionsPublic: return .predictions
         }
     }
 
@@ -48,10 +60,16 @@ enum ConnectionMethod: String, Codable, Identifiable {
         case .discordDesktop: return "Discord Desktop"
         case .discordBot: return "Discord Bot"
 
+        case .imessageLocal: return "Messages.app"
+
         case .twitterOAuth: return "Sign in with X"
         case .twitterAPI: return "X API"
 
         case .grokAPI: return "xAI API"
+
+        case .marketsPublic: return "Yahoo Finance + CoinGecko"
+        case .newsPublic: return "RSS Feeds"
+        case .predictionsPublic: return "Polymarket"
         }
     }
 
@@ -61,17 +79,23 @@ enum ConnectionMethod: String, Codable, Identifiable {
         case .gmailMailApp: return "Read from Apple Mail"
         case .gmailIMAP: return "Direct mail access"
 
-        case .slackDesktop: return "Connect to running Slack app"
+        case .slackDesktop: return "Read from local cache - no setup"
         case .slackOAuth: return "Sign in to your workspace"
         case .slackBot: return "Requires workspace admin"
 
-        case .discordDesktop: return "Connect to running Discord app"
+        case .discordDesktop: return "Read from local cache - no setup"
         case .discordBot: return "Requires creating a bot"
+
+        case .imessageLocal: return "Read full history - requires FDA"
 
         case .twitterOAuth: return "Just sign in"
         case .twitterAPI: return "Requires developer account"
 
         case .grokAPI: return "xAI API key required"
+
+        case .marketsPublic: return "Free - no setup needed"
+        case .newsPublic: return "Free - no setup needed"
+        case .predictionsPublic: return "Free - no setup needed"
         }
     }
 
@@ -79,7 +103,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
         switch self {
         case .gmailOAuth, .slackOAuth, .twitterOAuth:
             return "person.badge.key.fill"
-        case .gmailMailApp, .slackDesktop, .discordDesktop:
+        case .gmailMailApp, .slackDesktop, .discordDesktop, .imessageLocal:
             return "macwindow"
         case .gmailIMAP:
             return "envelope.badge.fill"
@@ -87,12 +111,15 @@ enum ConnectionMethod: String, Codable, Identifiable {
             return "cpu"
         case .twitterAPI, .grokAPI:
             return "key.fill"
+        case .marketsPublic, .newsPublic, .predictionsPublic:
+            return "globe"
         }
     }
 
     var complexity: Complexity {
         switch self {
-        case .gmailMailApp, .slackDesktop, .discordDesktop:
+        case .gmailMailApp, .slackDesktop, .discordDesktop, .imessageLocal,
+             .marketsPublic, .newsPublic, .predictionsPublic:
             return .easy
         case .gmailOAuth, .slackOAuth, .twitterOAuth:
             return .medium
@@ -103,7 +130,7 @@ enum ConnectionMethod: String, Codable, Identifiable {
 
     var isDesktopIntegration: Bool {
         switch self {
-        case .gmailMailApp, .slackDesktop, .discordDesktop:
+        case .gmailMailApp, .slackDesktop, .discordDesktop, .imessageLocal:
             return true
         default:
             return false
@@ -112,7 +139,8 @@ enum ConnectionMethod: String, Codable, Identifiable {
 
     var requiresCredentials: Bool {
         switch self {
-        case .gmailMailApp, .slackDesktop, .discordDesktop:
+        case .gmailMailApp, .slackDesktop, .discordDesktop, .imessageLocal,
+             .marketsPublic, .newsPublic, .predictionsPublic:
             return false
         default:
             return true
@@ -155,6 +183,9 @@ enum ConnectionMethod: String, Codable, Identifiable {
                 CredentialFieldInfo(key: "token", label: "Bot Token", isSecret: true, placeholder: "")
             ]
 
+        case .imessageLocal:
+            return [] // No credentials - reads from local SQLite database
+
         case .twitterOAuth:
             return [
                 CredentialFieldInfo(key: "client_id", label: "Client ID", isSecret: false, placeholder: ""),
@@ -171,6 +202,9 @@ enum ConnectionMethod: String, Codable, Identifiable {
             return [
                 CredentialFieldInfo(key: "api_key", label: "API Key", isSecret: true, placeholder: "xai-...")
             ]
+
+        case .marketsPublic, .newsPublic, .predictionsPublic:
+            return [] // No credentials needed
         }
     }
 
@@ -188,6 +222,8 @@ enum ConnectionMethod: String, Codable, Identifiable {
             return URL(string: "https://developer.twitter.com/en/portal/dashboard")
         case .grokAPI:
             return URL(string: "https://console.x.ai")
+        case .marketsPublic, .newsPublic, .predictionsPublic:
+            return nil // No setup needed
         default:
             return nil
         }
@@ -202,21 +238,30 @@ enum ConnectionMethod: String, Codable, Identifiable {
         case .gmailIMAP:
             return "Create an App Password in your Google Account settings"
         case .slackDesktop:
-            return "Make sure Slack.app is running and you're signed in"
+            return "Reads from local cache - works automatically"
         case .slackOAuth:
             return "Create a Slack app with required OAuth scopes"
         case .slackBot:
             return "Create a Slack app with bot token scopes. Requires workspace admin."
         case .discordDesktop:
-            return "Make sure Discord.app is running and you're signed in"
+            return "Reads from local cache - works automatically"
         case .discordBot:
             return "Create a Discord application and bot in the Developer Portal"
+        case .imessageLocal:
+            return "Requires Full Disk Access in System Settings > Privacy & Security"
         case .twitterOAuth:
             return "Create an app in the Twitter Developer Portal with OAuth 2.0"
         case .twitterAPI:
             return "Get API keys from Twitter Developer Portal (may require approval)"
         case .grokAPI:
             return "Get your API key from the xAI console"
+
+        case .marketsPublic:
+            return "Live market data from Yahoo Finance and CoinGecko"
+        case .newsPublic:
+            return "Tech news from Hacker News, Verge, Ars Technica, and more"
+        case .predictionsPublic:
+            return "Trending prediction markets from Polymarket"
         }
     }
 
@@ -256,10 +301,18 @@ extension Platform {
             return [.slackDesktop, .slackOAuth, .slackBot]
         case .discord:
             return [.discordDesktop, .discordBot]
+        case .imessage:
+            return [.imessageLocal]
         case .twitter:
             return [.twitterOAuth, .twitterAPI]
         case .grok:
             return [.grokAPI]
+        case .markets:
+            return [.marketsPublic]
+        case .news:
+            return [.newsPublic]
+        case .predictions:
+            return [.predictionsPublic]
         }
     }
 

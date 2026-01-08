@@ -45,42 +45,22 @@ struct Message: Identifiable, Codable {
     }
 }
 
-// MARK: - Sample Data
+// MARK: - Preview Data (only for SwiftUI Previews)
 
+#if DEBUG
 extension Message {
     static let sampleMessages: [Message] = [
         Message(
-            id: "gmail:1",
+            id: "preview:1",
             platform: .gmail,
-            platformMessageId: "msg_001",
-            senderName: "John Smith",
-            senderHandle: "john@company.com",
+            platformMessageId: "preview_001",
+            senderName: "Preview Sender",
+            senderHandle: "preview@example.com",
             senderAvatarURL: nil,
-            subject: "Re: Q1 Planning Meeting",
-            content: "Can you review the budget proposal and let me know your thoughts by EOD?",
-            timestamp: Date().addingTimeInterval(-120), // 2 min ago
+            subject: "Preview Message",
+            content: "This is a preview message for development only.",
+            timestamp: Date(),
             channelName: nil,
-            threadId: "thread_001",
-            priority: .high,
-            needsResponse: true,
-            isRead: false,
-            draft: Draft(
-                content: "Hi John, I'll review the budget proposal and get back to you by end of day. Thanks for sending it over.",
-                tone: .professional,
-                generatedAt: Date()
-            )
-        ),
-        Message(
-            id: "slack:1",
-            platform: .slack,
-            platformMessageId: "msg_002",
-            senderName: "Sarah Chen",
-            senderHandle: "@sarah",
-            senderAvatarURL: nil,
-            subject: nil,
-            content: "Hey, quick question about the API integration - are we still planning to use the v2 endpoints?",
-            timestamp: Date().addingTimeInterval(-900), // 15 min ago
-            channelName: "#engineering",
             threadId: nil,
             priority: .medium,
             needsResponse: true,
@@ -88,38 +68,26 @@ extension Message {
             draft: nil
         ),
         Message(
-            id: "discord:1",
-            platform: .discord,
-            platformMessageId: "msg_003",
-            senderName: "GameDev Mike",
-            senderHandle: "mike#1234",
+            id: "preview:2",
+            platform: .slack,
+            platformMessageId: "preview_002",
+            senderName: "Preview User",
+            senderHandle: "@preview",
             senderAvatarURL: nil,
             subject: nil,
-            content: "Are we still on for the gaming session tonight?",
-            timestamp: Date().addingTimeInterval(-3600), // 1 hour ago
-            channelName: nil,
-            threadId: nil,
-            priority: .low,
-            needsResponse: true,
-            isRead: false,
-            draft: nil
-        ),
-        Message(
-            id: "twitter:1",
-            platform: .twitter,
-            platformMessageId: "msg_004",
-            senderName: "Tech News",
-            senderHandle: "@technews",
-            senderAvatarURL: nil,
-            subject: nil,
-            content: "Thanks for the follow! Check out our latest article on AI trends.",
-            timestamp: Date().addingTimeInterval(-7200), // 2 hours ago
-            channelName: nil,
+            content: "Another preview message for testing.",
+            timestamp: Date().addingTimeInterval(-300),
+            channelName: "#preview",
             threadId: nil,
             priority: .low,
             needsResponse: false,
-            isRead: true,
+            isRead: false,
             draft: nil
         )
     ]
 }
+#else
+extension Message {
+    static let sampleMessages: [Message] = []
+}
+#endif

@@ -13,6 +13,7 @@ let package = Package(
         .package(url: "https://github.com/sindresorhus/Defaults.git", from: "8.0.0"),
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts.git", from: "2.0.0"),
         .package(url: "https://github.com/sindresorhus/LaunchAtLogin-Modern.git", from: "1.0.0"),
+        .package(url: "https://github.com/google/GoogleSignIn-iOS.git", from: "8.0.0"),
     ],
     targets: [
         .executableTarget(
@@ -21,6 +22,7 @@ let package = Package(
                 "Defaults",
                 "KeyboardShortcuts",
                 .product(name: "LaunchAtLogin", package: "LaunchAtLogin-Modern"),
+                .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS"),
             ],
             path: "Sources/Baku"
         )

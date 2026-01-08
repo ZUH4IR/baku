@@ -120,6 +120,14 @@ class SettingsManager: ObservableObject {
             if let apiKey = getCredential(platform: platform, key: "api_key") {
                 env["GROK_API_KEY"] = apiKey
             }
+
+        case .imessage:
+            // No credentials - reads from local SQLite database
+            break
+
+        case .markets, .news, .predictions:
+            // No credentials needed - free public APIs
+            break
         }
 
         return env
@@ -190,8 +198,10 @@ class SettingsManager: ObservableObject {
         case .gmail: keys = ["client_id", "client_secret", "access_token", "refresh_token"]
         case .slack: keys = ["bot_token", "app_token"]
         case .discord: keys = ["token"]
+        case .imessage: keys = [] // No credentials - local database access
         case .twitter: keys = ["api_key", "api_secret", "access_token", "access_secret"]
         case .grok: keys = ["api_key"]
+        case .markets, .news, .predictions: keys = [] // No credentials
         }
 
         for key in keys {
@@ -203,8 +213,12 @@ class SettingsManager: ObservableObject {
 // MARK: - Defaults Keys
 
 extension Defaults.Keys {
-    static let enabledPlatforms = Key<[String]>("enabledPlatforms", default: [])
-    static let connectionMethods = Key<[String: String]>("connectionMethods", default: [:])
+    // Default platforms: Gmail (via Mail.app) and Slack (via desktop cache)
+    static let enabledPlatforms = Key<[String]>("enabledPlatforms", default: [Platform.gmail.rawValue, Platform.slack.rawValue])
+    static let connectionMethods = Key<[String: String]>("connectionMethods", default: [
+        Platform.gmail.rawValue: ConnectionMethod.gmailMailApp.rawValue,
+        Platform.slack.rawValue: ConnectionMethod.slackDesktop.rawValue
+    ])
     static let launchAtLogin = Key<Bool>("launchAtLogin", default: false)
     static let morningNotifications = Key<Bool>("morningNotifications", default: true)
     static let morningTime = Key<Date>("morningTime", default: Calendar.current.date(from: DateComponents(hour: 7, minute: 0)) ?? Date())
